@@ -13,7 +13,6 @@ import android.net.ProxyInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
-import android.os.StrictMode
 import android.util.Log
 import androidx.annotation.RequiresApi
 import com.v2ray.ang.AppConfig
@@ -75,8 +74,6 @@ class V2RayVpnService : VpnService(), ServiceControl {
     override fun onCreate() {
         super.onCreate()
         Log.i(AppConfig.TAG, "StartCore-VPN: Service created")
-        val policy = StrictMode.ThreadPolicy.Builder().permitAll().build()
-        StrictMode.setThreadPolicy(policy)
         V2RayServiceManager.serviceControl = SoftReference(this)
     }
 

@@ -21,7 +21,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center"
-        android:paddingTop="8dp"
+        android:paddingTop="16dp"
         android:text="Liên hệ WeChat: Vutruong1692 nếu cần mua VPN"
         android:textColor="#1565C0"
         android:textSize="12sp"

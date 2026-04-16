@@ -9,6 +9,18 @@
             android:icon="@drawable/ic_subscriptions_24dp"
             android:title="@string/title_sub_setting" />
         <item
+            android:id="@+id/update_tiktok"
+            android:icon="@drawable/ic_check_update_24dp"
+            android:title="Cập nhật Tiktok" />
+        <item
+            android:id="@+id/download_tiktok_plusgin"
+            android:icon="@drawable/ic_check_update_24dp"
+            android:title="Tải app plusgin" />
+        <item
+            android:id="@+id/update_yumvpn"
+            android:icon="@drawable/ic_check_update_24dp"
+            android:title="Cập nhật app VPN" />
+        <item
             android:id="@+id/per_app_proxy_settings"
             android:icon="@drawable/ic_per_apps_24dp"
             android:title="@string/per_app_proxy_settings" />

@@ -186,7 +186,7 @@
 
     <PreferenceCategory
         android:title="@string/title_mux_settings"
-        app:initialExpandedChildrenCount="0">
+        >
         <CheckBoxPreference
             android:key="pref_mux_enabled"
             android:summary="@string/summary_pref_mux_enabled"
@@ -215,7 +215,7 @@
 
     <PreferenceCategory
         android:title="@string/title_fragment_settings"
-        app:initialExpandedChildrenCount="0">
+        >
         <CheckBoxPreference
             android:key="pref_fragment_enabled"
             android:title="@string/title_pref_fragment_enabled" />
@@ -241,7 +241,7 @@
 
     <PreferenceCategory
         android:title="@string/title_sub_setting"
-        app:initialExpandedChildrenCount="0">
+        >
         <CheckBoxPreference
             android:key="pref_auto_update_subscription"
             android:summary="@string/summary_pref_auto_update_subscription"

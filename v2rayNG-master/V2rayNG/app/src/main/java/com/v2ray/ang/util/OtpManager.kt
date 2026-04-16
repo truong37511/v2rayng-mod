@@ -7,12 +7,18 @@ import kotlin.math.pow
 
 object OtpManager {
 
-    // 🔑 Key chuẩn Base32 (16 ký tự)
+    // 🔑 Secret cũ — dùng cho Admin thường
+    // (OtpDialog, AdminOtpDialog)
     private const val SECRET_KEY = "JBSWY3DPEHPK3PXP"
 
-    private fun generateTotpForTime(timeStep: Long): String {
+    // 🔑 Secret mới — dùng cho 3 dialog gọi API
+    // (OtpUpdateDialog, OtpYearDialog, OtpShopDialog)
+    // ⚠️ Thay chuỗi này bằng secret Base32 bạn muốn, rồi thêm vào Google Authenticator
+    private const val SECRET_KEY_API = "QPR3S4MCFDIVDUQI"
+
+    private fun generateTotpForTime(timeStep: Long, secret: String = SECRET_KEY): String {
         val base32 = Base32()
-        val key = base32.decode(SECRET_KEY)
+        val key = base32.decode(secret)
 
         val data = ByteArray(8)
         var value = timeStep
@@ -36,23 +42,34 @@ object OtpManager {
 
     fun generateTotp(): String {
         val time = System.currentTimeMillis() / 1000 / 30
-        return generateTotpForTime(time)
+        return generateTotpForTime(time, SECRET_KEY)
     }
 
-    // 🔥 Verify cho phép lệch thời gian ±1 step
+    // ✅ Verify Admin thường — OtpDialog, AdminOtpDialog
     fun verify(inputCode: String): Boolean {
         val time = System.currentTimeMillis() / 1000 / 30
-
-        val current = generateTotpForTime(time)
-        val prev = generateTotpForTime(time - 1)
-        val next = generateTotpForTime(time + 1)
-
-        return inputCode == current || inputCode == prev || inputCode == next
+        return inputCode == generateTotpForTime(time, SECRET_KEY) ||
+                inputCode == generateTotpForTime(time - 1, SECRET_KEY) ||
+                inputCode == generateTotpForTime(time + 1, SECRET_KEY)
     }
 
-    // 🔗 QR URI (đã encode chuẩn)
+    // ✅ Verify API — OtpUpdateDialog, OtpYearDialog, OtpShopDialog
+    fun verifyApi(inputCode: String): Boolean {
+        val time = System.currentTimeMillis() / 1000 / 30
+        return inputCode == generateTotpForTime(time, SECRET_KEY_API) ||
+                inputCode == generateTotpForTime(time - 1, SECRET_KEY_API) ||
+                inputCode == generateTotpForTime(time + 1, SECRET_KEY_API)
+    }
+
+    // 🔗 QR URI cho Admin thường
     fun getQrUri(accountName: String = "YumVPN"): String {
         val encodedName = java.net.URLEncoder.encode(accountName, "UTF-8")
         return "otpauth://totp/$encodedName?secret=$SECRET_KEY&issuer=YumVPN"
+    }
+
+    // 🔗 QR URI cho API
+    fun getQrUriApi(accountName: String = "YumVPN-API"): String {
+        val encodedName = java.net.URLEncoder.encode(accountName, "UTF-8")
+        return "otpauth://totp/$encodedName?secret=$SECRET_KEY_API&issuer=YumVPN"
     }
 }

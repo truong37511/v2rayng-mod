@@ -1,15 +1,16 @@
 package com.v2ray.ang.worker
 
 import android.content.Context
-import androidx.work.BackoffPolicy
 import androidx.work.Worker
 import androidx.work.WorkerParameters
+import com.v2ray.ang.AppConfig
 import com.v2ray.ang.handler.MmkvManager
-import java.util.concurrent.TimeUnit
+import com.v2ray.ang.util.MessageUtil
 
 /**
  * Worker chạy ngầm (kể cả khi app bị tắt) để xóa các server
  * được import bởi "Admin mã nhỏ" (OtpUpdateDialog) sau đúng 5 phút.
+ * Sau khi xóa server đang chọn → tự động tắt VPN luôn.
  */
 class AutoDeleteServerWorker(
     context: Context,
@@ -26,30 +27,31 @@ class AutoDeleteServerWorker(
         if (guidsToDelete.isEmpty()) return Result.success()
 
         val selectedGuid = MmkvManager.getSelectServer()
-        var needReselect = false
+        var needStopVpn = false
         var deletedCount = 0
 
         for (guid in guidsToDelete) {
             if (guid == null) continue
 
-            // Kiểm tra trực tiếp qua profileFullStorage
-            // KHÔNG dùng decodeAllServerList() vì MMKV lazy init có thể chưa load xong
             val config = MmkvManager.decodeServerConfig(guid)
-            if (config == null) continue  // server không tồn tại hoặc đã bị xóa trước
+            if (config == null) continue
 
-            if (guid == selectedGuid) needReselect = true
+            if (guid == selectedGuid) needStopVpn = true
             MmkvManager.removeServer(guid)
             deletedCount++
         }
 
-        if (needReselect) {
+        // Chuyển select sang server còn lại nếu có
+        if (needStopVpn) {
             val firstRemaining = MmkvManager.decodeAllServerList().firstOrNull()
             if (!firstRemaining.isNullOrBlank()) {
                 MmkvManager.setSelectServer(firstRemaining)
             }
+
+            // Gửi lệnh tắt VPN về service — giống cách MainActivity.handleFabAction() làm
+            MessageUtil.sendMsg2Service(applicationContext, AppConfig.MSG_STATE_STOP, "")
         }
 
-        // Nếu không xóa được gì dù GUID vẫn còn → retry sau 1 phút
         if (deletedCount == 0) {
             val anyStillExists = guidsToDelete.any { guid ->
                 guid != null && MmkvManager.decodeServerConfig(guid) != null

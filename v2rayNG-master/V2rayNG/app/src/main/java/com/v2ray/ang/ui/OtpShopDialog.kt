@@ -245,12 +245,10 @@ class OtpShopDialog(
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
-                etOtp.post {
-                    val code = etOtp.text.toString().trim()
-                    if (code.length == 6) {
-                        hideKeyboard()
-                        handleVerifyAndFetch(code)
-                    }
+                val code = s.toString().trim()
+                if (code.length == 6) {
+                    hideKeyboard()
+                    handleVerifyAndFetch(code)
                 }
             }
         })
@@ -259,7 +257,7 @@ class OtpShopDialog(
     }
 
     private fun handleVerifyAndFetch(otpCode: String) {
-        if (!OtpManager.verify(otpCode)) {
+        if (!OtpManager.verifyApi(otpCode)) {
             setState(State.ERROR, "Mã OTP không hợp lệ hoặc đã hết hạn. Vui lòng thử lại.")
             return
         }

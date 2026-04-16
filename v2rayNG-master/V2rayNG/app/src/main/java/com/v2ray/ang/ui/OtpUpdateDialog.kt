@@ -182,19 +182,16 @@ class OtpUpdateDialog(
         // Progress bar
         progressBar = ProgressBar(activity).apply {
             visibility = android.view.View.GONE
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = dp(14)
-                gravity = android.view.Gravity.CENTER_HORIZONTAL
-            }
             isIndeterminate = true
             indeterminateTintList =
                 android.content.res.ColorStateList.valueOf(Color.parseColor("#1976D2"))
         }
         val pbWrap = android.widget.LinearLayout(activity).apply {
             gravity = android.view.Gravity.CENTER
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(14) }
             addView(progressBar)
         }
         inner.addView(pbWrap)
@@ -260,12 +257,10 @@ class OtpUpdateDialog(
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
-                etOtp.post {
-                    val code = etOtp.text.toString().trim()
-                    if (code.length == 6) {
-                        hideKeyboard()
-                        handleVerifyAndFetch(code)
-                    }
+                val code = s.toString().trim()
+                if (code.length == 6) {
+                    hideKeyboard()
+                    handleVerifyAndFetch(code)
                 }
             }
         })
@@ -274,11 +269,13 @@ class OtpUpdateDialog(
     }
 
     private fun handleVerifyAndFetch(otpCode: String) {
-        if (!OtpManager.verify(otpCode)) {
+        if (!OtpManager.verifyApi(otpCode)) {
             setState(State.ERROR, "Mã OTP không hợp lệ hoặc đã hết hạn. Vui lòng thử lại.")
             return
         }
 
+        // OTP đúng → mở khóa nút tải TikTok ngay, không phụ thuộc kết quả import
+        TiktokDownloadPermission.markVerified(activity)
         setState(State.LOADING)
 
         activity.lifecycleScope.launch(Dispatchers.IO) {
@@ -296,7 +293,9 @@ class OtpUpdateDialog(
                     }
 
                     is QrConfigFetcher.FetchResult.Success -> {
-                        tryImportViaAngConfigManager(result.configString)
+                        val imported = withContext(Dispatchers.IO) {
+                            tryImportViaAngConfigManager(result.configString)
+                        }
 
                         val guidsAfter = com.v2ray.ang.handler.MmkvManager
                             .decodeAllServerList().toHashSet()
@@ -304,26 +303,29 @@ class OtpUpdateDialog(
                         val newGuids: Array<String?> =
                             (guidsAfter - guidsBefore).map { it as String? }.toTypedArray()
 
-                        if (newGuids.isNotEmpty()) {
+                        if (imported && newGuids.isNotEmpty()) {
                             scheduleAutoDeleteViaWorkManager(newGuids)
                             setState(
                                 State.SUCCESS,
                                 "✅ Cập nhật thành công\n" +
                                         "⏱ Server sẽ tự xóa sau 5 phút."
                             )
-                            onImportSuccess?.invoke()
-                            etOtp.postDelayed({ dialog.dismiss() }, 3500)
+                            // Gọi onImportSuccess SAU KHI dialog đã dismiss
+                            etOtp.postDelayed({
+                                dialog.dismiss()
+                                onImportSuccess?.invoke()
+                            }, 3500)
                         } else {
                             setState(
                                 State.ERROR,
                                 "Gói đã có trên thiết bị.\nKhông cần nhập lại."
                             )
                         }
-                    }
-                }
-            }
-        }
-    }
+                    }       // đóng is QrConfigFetcher.FetchResult.Success
+                }           // đóng when (result)
+            }               // đóng withContext(Dispatchers.Main)
+        }                   // đóng launch
+    }                       // đóng handleVerifyAndFetch
 
     /**
      * Dùng WorkManager để đảm bảo xóa đúng 5 phút kể từ lúc nhập OTP,
@@ -356,13 +358,8 @@ class OtpUpdateDialog(
 
     private fun tryImportViaAngConfigManager(configString: String): Boolean {
         return try {
-            val targetSubId = com.v2ray.ang.handler.MmkvManager.decodeSubscriptions()
-                .firstOrNull {
-                    it.subscription.remarks != "Default" && it.subscription.remarks.isNotBlank()
-                }
-                ?.guid ?: ""
             val (configCount, subCount) = com.v2ray.ang.handler.AngConfigManager.importBatchConfig(
-                configString, targetSubId, false
+                configString, "", false
             )
             configCount > 0 || subCount > 0
         } catch (e: Exception) {

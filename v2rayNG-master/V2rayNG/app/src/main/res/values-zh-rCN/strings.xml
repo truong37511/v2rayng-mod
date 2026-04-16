@@ -359,7 +359,7 @@
     <string name="title_configuration_share">分享配置</string>
     <string name="title_webdav_config_setting">WebDAV 设置</string>
     <string name="title_webdav_config_setting_unknown">请先设置 WebDAV</string>
-    <string name="title_webdav_url">WebDAV 服务器地址</string>WebDAV server address
+    <string name="title_webdav_url">WebDAV 服务器地址</string>
     <string name="title_webdav_user">用户名</string>
     <string name="title_webdav_pass">密码</string>
     <string name="title_webdav_remote_path">远程文件夹名（可选）</string>

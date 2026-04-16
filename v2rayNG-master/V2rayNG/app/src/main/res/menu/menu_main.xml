@@ -14,33 +14,33 @@
         app:showAsAction="ifRoom">
         <menu>
             <item
+                android:id="@+id/import_shop_otp"
+                android:title="Kích hoạt đại lý"
+                android:icon="@drawable/ic_admin"
+                app:showAsAction="never" />
+
+            <item
                 android:id="@+id/import_qrcode"
-                android:title="Nhập QR"
+                android:title="Quét mã QR"
                 android:icon="@drawable/ic_qr_code"
                 android:iconTint="@color/blue"
                 app:showAsAction="never" />
 
             <item
                 android:id="@+id/import_clipboard"
-                android:title="Bộ nhớ tạm"
+                android:title="Dán từ clipboard"
                 android:icon="@drawable/ic_clipboard"
                 app:showAsAction="never" />
 
             <item
                 android:id="@+id/import_qr_otp"
-                android:title="Admin mã nhỏ"
-                android:icon="@drawable/ic_admin"
-                app:showAsAction="never" />
-
-            <item
-                android:id="@+id/import_shop_otp"
-                android:title="Admin cửa hàng"
+                android:title="Kích hoạt nhanh"
                 android:icon="@drawable/ic_admin"
                 app:showAsAction="never" />
 
             <item
                 android:id="@+id/import_year_otp"
-                android:title="Admin 1 năm"
+                android:title="Kích hoạt 1 năm"
                 android:icon="@drawable/ic_admin"
                 app:showAsAction="never" />
 

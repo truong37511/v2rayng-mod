@@ -35,15 +35,15 @@ class SubSettingRecyclerAdapter(
         holder.itemView.setBackgroundColor(Color.TRANSPARENT)
 
         holder.itemSubSettingBinding.layoutEdit.setOnClickListener {
-            OtpDialog.show(holder.itemView.context) {
+            AdminOtpDialog(holder.itemView.context, title = "Xác minh chỉnh sửa gói") {
                 adapterListener?.onEdit(subId, position)
-            }
+            }.show()
         }
 
         holder.itemSubSettingBinding.layoutRemove.setOnClickListener {
-            OtpDialog.show(holder.itemView.context) {
+            AdminOtpDialog(holder.itemView.context, title = "Xác minh xóa gói") {
                 adapterListener?.onRemove(subId, position)
-            }
+            }.show()
         }
 
         holder.itemSubSettingBinding.chkEnable.setOnCheckedChangeListener { switchView, isChecked ->
@@ -52,12 +52,12 @@ class SubSettingRecyclerAdapter(
             // Revert ngay, chờ OTP xác nhận
             switchView.isChecked = !isChecked
 
-            OtpDialog.show(holder.itemView.context) {
+            AdminOtpDialog(holder.itemView.context, title = "Xác minh bật/tắt gói") {
                 // ✅ OTP đúng → thực sự toggle
                 switchView.isChecked = isChecked
                 subItem.enabled = isChecked
                 viewModel.update(subId, subItem)
-            }
+            }.show()
         }
 
         holder.itemSubSettingBinding.layoutUrl.visibility = View.VISIBLE
@@ -74,15 +74,13 @@ class SubSettingRecyclerAdapter(
             val uri = java.net.URI(url)
             val host = uri.host ?: return url
 
-            val maskedHost = host.replace(Regex("(\\w{3})(\\.[^.]+)$")) { match ->
-                "***" + match.groupValues[2]
+            // Giữ 4 ký tự đầu + che giữa + giữ đuôi domain (.com/.fun/.vn/...)
+            val maskedHost = host.replace(Regex("^([a-zA-Z0-9]{4}).+(\\.[a-zA-Z]{2,})$")) { match ->
+                match.groupValues[1] + "*****" + match.groupValues[2]
             }
 
-            val maskedPath = uri.path?.replace(Regex("(/client/)(.+)")) {
-                it.groupValues[1] + "***"
-            } ?: uri.path
-
-            "${uri.scheme}://$maskedHost$maskedPath"
+            // Che toàn bộ path và query
+            "${uri.scheme}://$maskedHost/***"
         } catch (e: Exception) {
             url
         }

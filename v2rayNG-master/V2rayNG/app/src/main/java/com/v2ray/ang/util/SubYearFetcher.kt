@@ -63,7 +63,7 @@ object SubYearFetcher {
         return try {
             val conn = URL(urlStr).openConnection() as HttpURLConnection
             conn.requestMethod = "GET"
-            conn.connectTimeout = 10_000
+            conn.connectTimeout = 8_000
             conn.readTimeout = 10_000
             conn.setRequestProperty("X-API-KEY", API_KEY)
 
@@ -84,7 +84,7 @@ object SubYearFetcher {
     private fun decodeQrFromUrl(qrUrl: String): String? {
         return try {
             val conn = URL(qrUrl).openConnection() as HttpURLConnection
-            conn.connectTimeout = 10_000
+            conn.connectTimeout = 8_000
             conn.readTimeout = 10_000
             val bytes = conn.inputStream.use { it.readBytes() }
 

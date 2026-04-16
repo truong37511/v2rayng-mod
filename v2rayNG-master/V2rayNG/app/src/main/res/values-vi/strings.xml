@@ -145,7 +145,7 @@
 
 
     <!-- Preferences -->
-    <string name="title_settings">Cài đặt</string>
+    <string name="title_settings">Cài đặt cấu hình</string>
     <string name="title_advanced">Cài đặt nâng cao</string>
     <string name="title_core_settings">Cài đặt lõi</string>
     <string name="title_vpn_settings">Cài đặt VPN</string>
@@ -245,7 +245,7 @@
     <string name="toast_tg_app_not_found">Không tìm thấy ứng dụng Telegram!</string>
 
     <string name="title_privacy_policy">Chính sách bảo mật</string>
-    <string name="title_about">Giới thiệu</string>
+    <string name="title_about">Giới thiệu mã nguồn</string>
     <string name="title_source_code">Mã nguồn</string>
     <string name="title_oss_license">Open Source licenses</string>
     <string name="title_tg_channel">Kênh Telegram</string>

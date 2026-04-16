@@ -33,6 +33,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Collections
@@ -131,6 +132,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val subItem = MmkvManager.decodeSubscription(subscriptionId) ?: return SubscriptionUpdateResult()
             AngConfigManager.updateConfigViaSub(SubscriptionCache(subscriptionId, subItem))
         }
+    }
+
+    /**
+     * Tự động cập nhật tất cả subscription ngầm khi VPN bật thành công.
+     * Cooldown 30 phút để tránh spam khi VPN reconnect liên tục.
+     * Callback [onSuccess] được gọi trên Main thread khi có ít nhất 1 sub thành công.
+     */
+    fun autoUpdateSubSilent(onSuccess: () -> Unit) {
+        val cooldownMs = 30 * 60 * 1000L // 30 phút
+        val lastUpdate = MmkvManager.decodeSettingsLong(AUTO_SUB_UPDATE_LAST_TIME_KEY, 0L)
+        val now = System.currentTimeMillis()
+
+        if (now - lastUpdate < cooldownMs) {
+            Log.i(AppConfig.TAG, "AutoSubUpdate: Skipped (cooldown ${(cooldownMs - (now - lastUpdate)) / 60000}m left)")
+            return
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            delay(4000L) // Đợi VPN ổn định 4 giây
+            try {
+                Log.i(AppConfig.TAG, "AutoSubUpdate: Starting silent update...")
+                val result = AngConfigManager.updateConfigViaSubAll()
+                Log.i(AppConfig.TAG, "AutoSubUpdate: Done — success=${result.successCount}, configs=${result.configCount}, fail=${result.failureCount}")
+
+                if (result.successCount > 0 || result.configCount > 0) {
+                    MmkvManager.encodeSettings(AUTO_SUB_UPDATE_LAST_TIME_KEY, now)
+                    withContext(Dispatchers.Main) {
+                        reloadServerList()
+                        onSuccess()
+                    }
+                }
+                // Nếu thất bại → im lặng hoàn toàn
+            } catch (e: Exception) {
+                Log.e(AppConfig.TAG, "AutoSubUpdate: Exception", e)
+            }
+        }
+    }
+
+    companion object {
+        private const val AUTO_SUB_UPDATE_LAST_TIME_KEY = "auto_sub_update_last_time"
     }
 
     fun exportAllServer(): Int {

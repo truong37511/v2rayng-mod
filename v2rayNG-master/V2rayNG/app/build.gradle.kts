@@ -8,12 +8,21 @@ android {
     namespace = "com.v2ray.ang"
     compileSdk = 36
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("C:/Users/PC/Desktop/yumvpn")
+            storePassword = "phamtruong381734510"
+            keyAlias = "yumvpn"
+            keyPassword = "phamtruong381734510"
+        }
+    }
+
     defaultConfig {
         applicationId = "com.v2ray.ang"
         minSdk = 24
         targetSdk = 36
-        versionCode = 2
-        versionName = "2.0.0"
+        versionCode = 21
+        versionName = "21.0.0"
         multiDexEnabled = true
 
         val abiFilterList = (properties["ABI_FILTERS"] as? String)?.split(';')
@@ -41,6 +50,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release") // ← gắn vào release
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

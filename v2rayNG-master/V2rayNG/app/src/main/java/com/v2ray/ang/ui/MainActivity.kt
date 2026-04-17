@@ -163,7 +163,14 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         super.onCreate(savedInstanceState)
         setContentView(binding.root)
 
-        setupToolbar(binding.toolbar, false, "Yum VPN")
+        setupToolbar(binding.toolbar, false, "")
+        // Hiện version nhỏ mờ bên cạnh tiêu đề "Yum VPN"
+        try {
+            val versionName = packageManager.getPackageInfo(packageName, 0).versionName
+            binding.tvToolbarVersion.text = "v$versionName"
+        } catch (e: Exception) {
+            binding.tvToolbarVersion.text = ""
+        }
 
         groupPagerAdapter = GroupPagerAdapter(this, emptyList())
         binding.viewPager.adapter = groupPagerAdapter
@@ -341,7 +348,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                 // ✅ Auto update subscription ngầm sau khi VPN kết nối thành công
                 mainViewModel.autoUpdateSubSilent {
                     // Callback chạy trên Main thread — hiện toast nhẹ
-                    showCustomToast("✓ Đã cập nhật gói đăng ký", "#0891B2")
+                    showCustomToast("✓ cập nhật máy chủ thành công", "#0891B2")
                     setupGroupTab()
                 }
             }
@@ -1374,7 +1381,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             text = message
             setTextColor(color)
             textSize = 14f
-            typeface = android.graphics.Typeface.create("sans-serif-light", android.graphics.Typeface.NORMAL)
+            typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
             letterSpacing = 0.03f
             setLineSpacing(dp * 2, 1f)
             val padH = (20 * dp).toInt()

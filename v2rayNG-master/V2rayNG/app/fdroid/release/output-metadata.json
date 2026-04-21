@@ -11,35 +11,9 @@
       "type": "UNIVERSAL",
       "filters": [],
       "attributes": [],
-      "versionCode": 5002200,
-      "versionName": "22.0.0",
-      "outputFile": "v2rayNG_22.0.0-fdroid_universal.apk"
-    },
-    {
-      "type": "ONE_OF_MANY",
-      "filters": [
-        {
-          "filterType": "ABI",
-          "value": "arm64-v8a"
-        }
-      ],
-      "attributes": [],
-      "versionCode": 5002201,
-      "versionName": "22.0.0",
-      "outputFile": "v2rayNG_22.0.0-fdroid_arm64-v8a.apk"
-    },
-    {
-      "type": "ONE_OF_MANY",
-      "filters": [
-        {
-          "filterType": "ABI",
-          "value": "x86_64"
-        }
-      ],
-      "attributes": [],
-      "versionCode": 5002203,
-      "versionName": "22.0.0",
-      "outputFile": "v2rayNG_22.0.0-fdroid_x86_64.apk"
+      "versionCode": 5003000,
+      "versionName": "30.0.0",
+      "outputFile": "v2rayNG_30.0.0-fdroid_universal.apk"
     },
     {
       "type": "ONE_OF_MANY",
@@ -50,9 +24,9 @@
         }
       ],
       "attributes": [],
-      "versionCode": 5002202,
-      "versionName": "22.0.0",
-      "outputFile": "v2rayNG_22.0.0-fdroid_armeabi-v7a.apk"
+      "versionCode": 5003002,
+      "versionName": "30.0.0",
+      "outputFile": "v2rayNG_30.0.0-fdroid_armeabi-v7a.apk"
     },
     {
       "type": "ONE_OF_MANY",
@@ -63,9 +37,35 @@
         }
       ],
       "attributes": [],
-      "versionCode": 5002204,
-      "versionName": "22.0.0",
-      "outputFile": "v2rayNG_22.0.0-fdroid_x86.apk"
+      "versionCode": 5003004,
+      "versionName": "30.0.0",
+      "outputFile": "v2rayNG_30.0.0-fdroid_x86.apk"
+    },
+    {
+      "type": "ONE_OF_MANY",
+      "filters": [
+        {
+          "filterType": "ABI",
+          "value": "x86_64"
+        }
+      ],
+      "attributes": [],
+      "versionCode": 5003003,
+      "versionName": "30.0.0",
+      "outputFile": "v2rayNG_30.0.0-fdroid_x86_64.apk"
+    },
+    {
+      "type": "ONE_OF_MANY",
+      "filters": [
+        {
+          "filterType": "ABI",
+          "value": "arm64-v8a"
+        }
+      ],
+      "attributes": [],
+      "versionCode": 5003001,
+      "versionName": "30.0.0",
+      "outputFile": "v2rayNG_30.0.0-fdroid_arm64-v8a.apk"
     }
   ],
   "elementType": "File",
@@ -74,22 +74,22 @@
       "minApi": 28,
       "maxApi": 30,
       "baselineProfiles": [
-        "baselineProfiles/1/v2rayNG_22.0.0-fdroid_universal.dm",
-        "baselineProfiles/1/v2rayNG_22.0.0-fdroid_arm64-v8a.dm",
-        "baselineProfiles/1/v2rayNG_22.0.0-fdroid_x86_64.dm",
-        "baselineProfiles/1/v2rayNG_22.0.0-fdroid_armeabi-v7a.dm",
-        "baselineProfiles/1/v2rayNG_22.0.0-fdroid_x86.dm"
+        "baselineProfiles/1/v2rayNG_30.0.0-fdroid_universal.dm",
+        "baselineProfiles/1/v2rayNG_30.0.0-fdroid_armeabi-v7a.dm",
+        "baselineProfiles/1/v2rayNG_30.0.0-fdroid_x86.dm",
+        "baselineProfiles/1/v2rayNG_30.0.0-fdroid_x86_64.dm",
+        "baselineProfiles/1/v2rayNG_30.0.0-fdroid_arm64-v8a.dm"
       ]
     },
     {
       "minApi": 31,
       "maxApi": 2147483647,
       "baselineProfiles": [
-        "baselineProfiles/0/v2rayNG_22.0.0-fdroid_universal.dm",
-        "baselineProfiles/0/v2rayNG_22.0.0-fdroid_arm64-v8a.dm",
-        "baselineProfiles/0/v2rayNG_22.0.0-fdroid_x86_64.dm",
-        "baselineProfiles/0/v2rayNG_22.0.0-fdroid_armeabi-v7a.dm",
-        "baselineProfiles/0/v2rayNG_22.0.0-fdroid_x86.dm"
+        "baselineProfiles/0/v2rayNG_30.0.0-fdroid_universal.dm",
+        "baselineProfiles/0/v2rayNG_30.0.0-fdroid_armeabi-v7a.dm",
+        "baselineProfiles/0/v2rayNG_30.0.0-fdroid_x86.dm",
+        "baselineProfiles/0/v2rayNG_30.0.0-fdroid_x86_64.dm",
+        "baselineProfiles/0/v2rayNG_30.0.0-fdroid_arm64-v8a.dm"
       ]
     }
   ],

@@ -537,19 +537,25 @@ object AngConfigManager {
             Log.i(AppConfig.TAG, url)
             val userAgent = it.subscription.userAgent
 
-            var configText = try {
+            // Thử fetch có proxy trước, fallback không proxy nếu thất bại
+            var configText = ""
+            var responseHeaders: Map<String, String> = emptyMap()
+
+            try {
                 val httpPort = SettingsManager.getHttpPort()
-                HttpUtil.getUrlContentWithUserAgent(url, userAgent, 15000, httpPort)
+                val (body, headers) = HttpUtil.getUrlContentWithHeaders(url, userAgent, 15000, httpPort)
+                configText = body
+                responseHeaders = headers
             } catch (e: Exception) {
                 Log.e(AppConfig.ANG_PACKAGE, "Update subscription: proxy not ready or other error", e)
-                ""
             }
             if (configText.isEmpty()) {
-                configText = try {
-                    HttpUtil.getUrlContentWithUserAgent(url, userAgent)
+                try {
+                    val (body, headers) = HttpUtil.getUrlContentWithHeaders(url, userAgent)
+                    configText = body
+                    responseHeaders = headers
                 } catch (e: Exception) {
                     Log.e(AppConfig.TAG, "Update subscription: Failed to get URL content with user agent", e)
-                    ""
                 }
             }
             if (configText.isEmpty()) {
@@ -557,7 +563,30 @@ object AngConfigManager {
                 return SubscriptionUpdateResult(failureCount = 1)
             }
 
-            Log.d(AppConfig.TAG, "DEBUG: configText length=${configText.length}, preview=${configText.take(300)}")
+            // DEBUG: log tất cả headers để xem v2board/xflash trả về gì
+            Log.d(AppConfig.TAG, "DEBUG_HEADERS for ${it.subscription.remarks}:")
+            responseHeaders.forEach { (k, v) ->
+                Log.d(AppConfig.TAG, "  HEADER: $k = $v")
+            }
+            Log.d(AppConfig.TAG, "DEBUG: configText length=${configText.length}, preview=${configText.take(500)}")
+
+            // Parse header subscription-userinfo để lấy ngày hết hạn
+            val userInfoHeader = responseHeaders["subscription-userinfo"]
+            if (!userInfoHeader.isNullOrBlank()) {
+                val expireValue = userInfoHeader
+                    .split(";")
+                    .map { it.trim() }
+                    .firstOrNull { it.startsWith("expire=") }
+                    ?.removePrefix("expire=")
+                    ?.trim()
+                    ?.toLongOrNull()
+                if (expireValue != null) {
+                    it.subscription.expireDate = expireValue
+                    Log.i(AppConfig.TAG, "Subscription expire parsed: $expireValue (${it.subscription.remarks})")
+                }
+            } else {
+                Log.w(AppConfig.TAG, "DEBUG: NO subscription-userinfo header for ${it.subscription.remarks}")
+            }
 
             val count = parseConfigViaSub(configText, it.guid, false)
             if (count > 0) {

@@ -286,7 +286,7 @@
     <string name="sub_setting_pre_profile">Previous proxy configuration remarks</string>
     <string name="sub_setting_next_profile">Next proxy configuration remarks</string>
     <string name="sub_setting_pre_profile_tip">The configuration remarks exists and is unique</string>
-    <string name="title_sub_update">Cập nhật máy chủ thành công</string>
+    <string name="title_sub_update">Cập nhật máy chủ</string>
     <string name="title_ping_all_server">Ping tất cả máy chủ</string>
     <string name="title_real_ping_all_server">Kiểm tra HTTP tất cả máy chủ</string>
     <string name="title_user_asset_setting">Asset files</string>

@@ -235,7 +235,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun testCurrentServerRealPing() {
-        MessageUtil.sendMsg2Service(getApplication(), AppConfig.MSG_MEASURE_DELAY, "")
+        // ✅ Dùng TCP socket trực tiếp thay vì gửi MSG_MEASURE_DELAY vào VPN service
+        // Tránh làm gián đoạn kết nối VPN đang chạy
+        val selectedGuid = MmkvManager.getSelectServer() ?: run {
+            MessageUtil.sendMsg2Service(getApplication(), AppConfig.MSG_MEASURE_DELAY, "")
+            return
+        }
+        val profile = MmkvManager.decodeServerConfig(selectedGuid) ?: run {
+            MessageUtil.sendMsg2Service(getApplication(), AppConfig.MSG_MEASURE_DELAY, "")
+            return
+        }
+        val host = profile.server
+        val port = profile.serverPort?.toIntOrNull()
+        if (host.isNullOrBlank() || port == null) {
+            MessageUtil.sendMsg2Service(getApplication(), AppConfig.MSG_MEASURE_DELAY, "")
+            return
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val delay = SpeedtestManager.tcping(host, port)
+            withContext(Dispatchers.Main) {
+                // Chỉ cập nhật thanh trạng thái dưới cùng, không hiện số trên từng server
+                val resultText = if (delay > 0) {
+                    "Kết nối mạng thành công. $delay ms"
+                } else {
+                    "Lỗi kết nối mạng, tắt nguồn điện thoại hoặc chọn máy chủ khác."
+                }
+                updateTestResultAction.value = resultText
+            }
+        }
     }
 
     fun subscriptionIdChanged(id: String) {
@@ -408,20 +436,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 AppConfig.MSG_STATE_START_SUCCESS -> {
-                    // Toast "Đã khởi động VPN!" đúng sự kiện: core thực sự đã chạy
-                    getApplication<AngApplication>().toastSuccess(R.string.toast_services_success)
                     isRunning.value = true
                 }
 
                 AppConfig.MSG_STATE_START_FAILURE -> {
-                    // Toast "Không thể khởi động VPN..."
                     getApplication<AngApplication>().toastError(R.string.toast_services_failure)
                     isRunning.value = false
                 }
 
                 AppConfig.MSG_STATE_STOP_SUCCESS -> {
-                    // Toast "Đã dừng VPN!" đúng sự kiện: VPN thực sự đã dừng
-                    getApplication<AngApplication>().toastSuccess(R.string.toast_services_stop)
                     isRunning.value = false
                 }
 

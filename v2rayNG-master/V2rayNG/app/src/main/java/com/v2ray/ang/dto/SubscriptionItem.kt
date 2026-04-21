@@ -13,5 +13,5 @@ data class SubscriptionItem(
     var filter: String? = null,
     var allowInsecureUrl: Boolean = false,
     var userAgent: String? = null,
+    var expireDate: Long? = null,       // Unix timestamp (giây) từ header subscription-userinfo
 )
-

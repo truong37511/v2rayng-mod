@@ -182,6 +182,18 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         binding.drawerLayout.addDrawerListener(toggle)
         toggle.syncState()
 
+        // Bấm Back khi drawer đang mở → đóng drawer, không thoát app
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (binding.drawerLayout.isDrawerOpen(GravityCompat.START)) {
+                    binding.drawerLayout.closeDrawer(GravityCompat.START)
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
+
         binding.navView.setNavigationItemSelectedListener(this)
         binding.fab.setOnClickListener { handleFabAction() }
 
@@ -200,7 +212,16 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             MmkvManager.encodeSettings(AppConfig.PREF_USE_HEV_TUNNEL, true)
             // Core
             MmkvManager.encodeSettings(AppConfig.PREF_ALLOW_INSECURE, true)
+            // Ngôn ngữ mặc định: Tiếng Việt
+            // Phải set trước khi đánh dấu defaults_applied, rồi recreate()
+            // để attachBaseContext chạy lại và áp dụng ngôn ngữ ngay lần đầu
+            MmkvManager.encodeSettings(AppConfig.PREF_LANGUAGE, "vi")
             prefs.edit().putBoolean("defaults_applied", true).apply()
+            recreate()
+            // Ẩn animation chớp khi recreate để user không nhận ra
+            @Suppress("DEPRECATION")
+            overridePendingTransition(0, 0)
+            return
         }
 
 
@@ -218,6 +239,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         mainViewModel.reloadServerList()
 
         invalidateOptionsMenu()
+        updateExpireBanner()
     }
 
     override fun onResume() {
@@ -229,6 +251,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
         // Kiểm tra các file đã tải xong trong lúc user thoát app
         checkPendingDownloads()
+        updateExpireBanner()
     }
 
     override fun onDestroy() {
@@ -347,9 +370,8 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
                 // ✅ Auto update subscription ngầm sau khi VPN kết nối thành công
                 mainViewModel.autoUpdateSubSilent {
-                    // Callback chạy trên Main thread — hiện toast nhẹ
-                    showCustomToast("✓ cập nhật máy chủ thành công", "#0891B2")
                     setupGroupTab()
+                    updateExpireBanner()
                 }
             }
             wasRunning = isRunning
@@ -443,6 +465,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                         tabMediator = null
                         mainViewModel.reloadServerList()
                         setupGroupTab()
+                        updateExpireBanner()
                         toast(getString(R.string.title_update_subscription_result, result.configCount))
                     }
                     result.failureCount > 0 -> toastError(R.string.toast_update_sub_failure)
@@ -541,6 +564,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             setupGroupTab()
             binding.viewPager.setCurrentItem(0, false)
             selectFirstServerIfNeeded()
+            updateExpireBanner()
         }).show()
     }
 
@@ -557,6 +581,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             setupGroupTab()
             binding.viewPager.setCurrentItem(0, false)
             selectFirstServerIfNeeded()
+            updateExpireBanner()
         }).show()
     }
 
@@ -770,6 +795,15 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
         val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
         val dp = resources.displayMetrics.density
+
+        // Xóa file cũ trước khi tải để tránh dùng cache cũ
+        try {
+            val oldFile = java.io.File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                fileName
+            )
+            if (oldFile.exists()) oldFile.delete()
+        } catch (_: Exception) {}
 
         val request = DownloadManager.Request(Uri.parse(url)).apply {
             setTitle(title)
@@ -1198,7 +1232,61 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.menu_main, menu)
+
+        // ── Đổi icon overflow (3 chấm) → dấu + xanh đậm, ngay khi view sẵn sàng ──
+        binding.toolbar.viewTreeObserver.addOnGlobalLayoutListener(object :
+            android.view.ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                binding.toolbar.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                try {
+                    for (i in 0 until binding.toolbar.childCount) {
+                        val view = binding.toolbar.getChildAt(i)
+                        if (view is androidx.appcompat.widget.ActionMenuView) {
+                            for (j in 0 until view.childCount) {
+                                val child = view.getChildAt(j)
+                                if (child.javaClass.simpleName.contains("Overflow", ignoreCase = true)) {
+                                    (child as? android.widget.ImageView)?.apply {
+                                        setImageResource(R.drawable.ic_add_blue)
+                                        imageTintList = android.content.res.ColorStateList.valueOf(
+                                            android.graphics.Color.parseColor("#1565C0")
+                                        )
+                                        scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+                                        val dp = resources.displayMetrics.density
+                                        val padH = (16 * dp).toInt()
+                                        val padV = (8 * dp).toInt()
+                                        setPadding(padH, padV, padH, padV)
+                                        (layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.let { lp ->
+                                            lp.marginEnd = (8 * dp).toInt()
+                                            layoutParams = lp
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) { }
+            }
+        })
+
         return true
+    }
+
+    override fun onMenuOpened(featureId: Int, menu: Menu): Boolean {
+        // Set width popup menu = 70% chiều ngang màn hình
+        try {
+            val screenWidth = resources.displayMetrics.widthPixels
+            val targetWidth = (screenWidth * 0.70).toInt()
+            val field = menu.javaClass.getDeclaredField("mPopup")
+            field.isAccessible = true
+            val popup = field.get(menu)
+            val listPopup = popup?.javaClass?.getDeclaredMethod("getPopup")
+                ?.apply { isAccessible = true }?.invoke(popup)
+            listPopup?.javaClass?.getDeclaredMethod("setWidth", Int::class.java)
+                ?.apply { isAccessible = true }?.invoke(listPopup, targetWidth)
+        } catch (e: Exception) {
+            // ignore nếu reflection không hoạt động trên device này
+        }
+        return super.onMenuOpened(featureId, menu)
     }
 
     override fun onPrepareOptionsMenu(menu: Menu): Boolean {
@@ -1210,11 +1298,14 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             // ignore
         }
 
-        val colorGreen  = android.graphics.Color.parseColor("#0891B2")
-        val colorOrange = android.graphics.Color.parseColor("#E65100")
+        val colorBlue = android.graphics.Color.parseColor("#2196F3")
+        val iconSizePx = (20 * resources.displayMetrics.density).toInt()
 
-        fun tintMenuItem(item: android.view.MenuItem) {
-            val color = if (item.itemId == R.id.import_shop_otp) colorOrange else colorGreen
+        fun styleMenuItem(item: android.view.MenuItem) {
+            // Tất cả chữ và icon đều màu xanh dương
+            val color = colorBlue
+
+            // 1. Màu chữ
             val span = android.text.SpannableString(item.title)
             span.setSpan(
                 android.text.style.ForegroundColorSpan(color),
@@ -1222,15 +1313,30 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                 android.text.Spannable.SPAN_INCLUSIVE_INCLUSIVE
             )
             item.title = span
+
+            // 2. Màu icon + thu nhỏ xuống 20dp
+            item.icon?.let { drawable ->
+                val tinted = drawable.mutate().apply { setTint(color) }
+                val w = tinted.intrinsicWidth.coerceAtLeast(1)
+                val h = tinted.intrinsicHeight.coerceAtLeast(1)
+                val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+                val canvas = android.graphics.Canvas(bmp)
+                tinted.setBounds(0, 0, w, h)
+                tinted.draw(canvas)
+                item.icon = android.graphics.drawable.BitmapDrawable(
+                    resources,
+                    android.graphics.Bitmap.createScaledBitmap(bmp, iconSizePx, iconSizePx, true)
+                )
+            }
         }
 
         for (i in 0 until menu.size()) {
             val item = menu.getItem(i)
-            tintMenuItem(item)
+            styleMenuItem(item)
             val sub = item.subMenu
             if (sub != null) {
                 for (j in 0 until sub.size()) {
-                    tintMenuItem(sub.getItem(j))
+                    styleMenuItem(sub.getItem(j))
                 }
             }
         }
@@ -1369,6 +1475,51 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             }
         }
         return true
+    }
+
+    /**
+     * Hiển thị banner ngày hết hạn subscription ngay dưới toolbar.
+     * Lấy sub enabled đầu tiên có expireDate, hiển thị màu theo trạng thái:
+     *   - Còn > 7 ngày  → nền xanh lá nhạt, chữ xanh
+     *   - Còn ≤ 7 ngày  → nền cam nhạt,    chữ cam đậm
+     *   - Đã hết hạn    → nền đỏ nhạt,     chữ đỏ đậm
+     * Không có sub nào có expireDate → ẩn banner.
+     */
+    private fun updateExpireBanner() {
+        val subs = MmkvManager.decodeSubscriptions()
+        val activeSub = subs.firstOrNull { it.subscription.enabled && it.subscription.expireDate != null }
+
+        if (activeSub == null) {
+            binding.layoutExpireBanner.visibility = android.view.View.GONE
+            return
+        }
+
+        val expireTs = activeSub.subscription.expireDate!! * 1000L  // giây → ms
+        val now = System.currentTimeMillis()
+        val diffDays = (expireTs - now) / (1000L * 60 * 60 * 24)
+
+        val sdf = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.getDefault())
+        val dateStr = sdf.format(java.util.Date(expireTs))
+
+        binding.layoutExpireBanner.visibility = android.view.View.VISIBLE
+
+        when {
+            now > expireTs -> {
+                binding.tvExpireDate.text = "ĐÃ HẾT HẠN ($dateStr)"
+                binding.tvExpireDate.setTextColor(android.graphics.Color.parseColor("#B71C1C"))
+                binding.layoutExpireBanner.setBackgroundColor(android.graphics.Color.parseColor("#FFEBEE"))
+            }
+            diffDays <= 7 -> {
+                binding.tvExpireDate.text = "$dateStr (còn $diffDays ngày)"
+                binding.tvExpireDate.setTextColor(android.graphics.Color.parseColor("#E65100"))
+                binding.layoutExpireBanner.setBackgroundColor(android.graphics.Color.parseColor("#FFF3E0"))
+            }
+            else -> {
+                binding.tvExpireDate.text = "$dateStr (còn $diffDays ngày)"
+                binding.tvExpireDate.setTextColor(android.graphics.Color.parseColor("#1B5E20"))
+                binding.layoutExpireBanner.setBackgroundColor(android.graphics.Color.parseColor("#FFFFFF"))
+            }
+        }
     }
 
     /**

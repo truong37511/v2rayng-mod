@@ -89,7 +89,6 @@ class GroupServerFragment : BaseFragment<FragmentGroupServerBinding>(),
         ownerActivity.importConfigViaSub()
         binding.refreshLayout.postDelayed({
             binding.refreshLayout.isRefreshing = false
-            ownerActivity.toastSuccess("Đã cập nhật server")
         }, 1000)
     }
 

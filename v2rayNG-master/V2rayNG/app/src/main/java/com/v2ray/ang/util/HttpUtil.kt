@@ -227,6 +227,63 @@ object HttpUtil {
         return conn
     }
 
+    /**
+     * Giống getUrlContentWithUserAgent nhưng trả về cả body lẫn response headers.
+     * Dùng để đọc header subscription-userinfo (expire, upload, download, total).
+     *
+     * @return Pair<body: String, headers: Map<String, String>>
+     *         headers key đã lowercase để so sánh dễ dàng.
+     * @throws IOException nếu quá nhiều redirect hoặc kết nối thất bại.
+     */
+    @Throws(IOException::class)
+    fun getUrlContentWithHeaders(
+        url: String?,
+        userAgent: String?,
+        timeout: Int = 15000,
+        httpPort: Int = 0
+    ): Pair<String, Map<String, String>> {
+        var currentUrl = url
+        var redirects = 0
+        val maxRedirects = 3
+
+        while (redirects++ < maxRedirects) {
+            if (currentUrl == null) continue
+            val conn = createProxyConnection(currentUrl, httpPort, timeout, timeout) ?: continue
+            val finalUserAgent = if (userAgent.isNullOrBlank()) {
+                "v2rayNG/${BuildConfig.VERSION_NAME}"
+            } else {
+                userAgent
+            }
+            conn.setRequestProperty("User-agent", finalUserAgent)
+            conn.connect()
+
+            val responseCode = conn.responseCode
+            when (responseCode) {
+                in 300..399 -> {
+                    val location = resolveLocation(conn)
+                    conn.disconnect()
+                    if (location.isNullOrEmpty()) {
+                        throw IOException("Redirect location not found")
+                    }
+                    currentUrl = location
+                    continue
+                }
+                else -> try {
+                    val body = conn.inputStream.use { it.bufferedReader().readText() }
+                    // Đọc tất cả headers, key lowercase, lấy giá trị đầu tiên nếu nhiều value
+                    val headers = conn.headerFields
+                        .filterKeys { it != null }
+                        .mapKeys { it.key.lowercase() }
+                        .mapValues { it.value.firstOrNull() ?: "" }
+                    return Pair(body, headers)
+                } finally {
+                    conn.disconnect()
+                }
+            }
+        }
+        throw IOException("Too many redirects")
+    }
+
     // Returns absolute URL string location header sets
     fun resolveLocation(conn: HttpURLConnection): String? {
         val raw = conn.getHeaderField("Location")?.trim()?.takeIf { it.isNotEmpty() } ?: return null
@@ -251,4 +308,3 @@ object HttpUtil {
         }
     }
 }
-

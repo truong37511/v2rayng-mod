@@ -63,7 +63,8 @@ class AdminOtpDialog(
         // ── 1 ô OTP duy nhất ─────────────────────────────────────────────
         val etOtp = EditText(context).apply {
             hint = "______"
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                    android.text.InputType.TYPE_NUMBER_VARIATION_NORMAL
             textSize = 32f
             setTextColor(Color.parseColor("#1B5E20"))
             setHintTextColor(Color.parseColor("#A5D6A7"))
@@ -118,6 +119,7 @@ class AdminOtpDialog(
             android.graphics.drawable.GradientDrawable().apply {
                 setColor(Color.WHITE)
                 cornerRadius = 28 * dp
+                setStroke((2.5 * dp).toInt(), Color.parseColor("#1A237E"))
             }
         )
 

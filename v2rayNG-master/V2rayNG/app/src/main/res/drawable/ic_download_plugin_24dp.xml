@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+
+    <!-- Thân điện thoại -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M7,2 L17,2 Q18,2 18,3 L18,21 Q18,22 17,22 L7,22 Q6,22 6,21 L6,3 Q6,2 7,2 Z" />
+
+    <!-- Chấm tròn dưới điện thoại -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M12,18.5 A1,1 0 1,1 11.9999,18.5 Z" />
+
+    <!-- Mũi tên tải xuống -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M12,7 L12,13" />
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M9.5,11 L12,13.5 L14.5,11" />
+
+</vector>

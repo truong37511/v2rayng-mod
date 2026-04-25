@@ -10,16 +10,17 @@
             android:title="@string/title_sub_setting" />
         <item
             android:id="@+id/update_tiktok"
-            android:icon="@drawable/ic_check_update_24dp"
+            android:icon="@drawable/ic_tiktok_update_24dp"
             android:title="Cập nhật Tiktok" />
         <item
             android:id="@+id/download_tiktok_plusgin"
-            android:icon="@drawable/ic_file_24dp"
+            android:icon="@drawable/ic_download_plugin_24dp"
             android:title="Tải app plusgin" />
         <item
             android:id="@+id/update_yumvpn"
-            android:icon="@drawable/ic_per_apps_24dp"
+            android:icon="@drawable/ic_vpn_update_24dp"
             android:title="Cập nhật app VPN" />
+
         <item
             android:id="@+id/per_app_proxy_settings"
             android:icon="@drawable/ic_per_apps_24dp"
@@ -38,6 +39,10 @@
             android:id="@+id/settings"
             android:icon="@drawable/ic_settings_24dp"
             android:title="@string/title_settings" />
+        <item
+            android:id="@+id/app_expire_setting"
+            android:icon="@drawable/ic_expire_24dp"
+            android:title="Cài hạn sử dụng App" />
     </group>
 
     <group android:id="@+id/group_id2">
@@ -65,7 +70,6 @@
             android:id="@+id/about"
             android:icon="@drawable/ic_about_24dp"
             android:title="@string/title_about" />
-        <!-- place holder for version text at the bottom -->
         <item
             android:id="@+id/placeholder"
             android:enabled="false"

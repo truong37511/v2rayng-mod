@@ -21,8 +21,8 @@ android {
         applicationId = "com.v2ray.ang"
         minSdk = 24
         targetSdk = 36
-        versionCode = 30
-        versionName = "30.0.0"
+        versionCode = 35
+        versionName = "35.0.0"
         multiDexEnabled = true
 
         val abiFilterList = (properties["ABI_FILTERS"] as? String)?.split(';')
@@ -49,7 +49,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true       // R8: xóa code/class không dùng
+            isShrinkResources = true     // Xóa resource/icon/layout không dùng
             signingConfig = signingConfigs.getByName("release") // ← gắn vào release
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

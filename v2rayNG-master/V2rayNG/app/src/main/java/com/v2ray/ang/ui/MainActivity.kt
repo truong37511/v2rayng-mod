@@ -27,6 +27,7 @@ import com.v2ray.ang.extension.toastSuccess
 import com.v2ray.ang.handler.*
 import com.v2ray.ang.util.Utils
 import com.v2ray.ang.viewmodel.MainViewModel
+import com.v2ray.ang.handler.AppExpireManager
 import kotlinx.coroutines.*
 
 class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelectedListener {
@@ -43,7 +44,14 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         }
 
     // ✅ Lưu URI APK tạm — dùng sau khi user bật quyền cài APK ngoài xong
+    // Tự động persist vào SharedPreferences → khôi phục được sau force stop / xóa RAM
     private var pendingInstallUri: android.net.Uri? = null
+        set(value) {
+            field = value
+            val prefs = getSharedPreferences("install_prefs", MODE_PRIVATE)
+            if (value != null) prefs.edit().putString("pending_uri", value.toString()).apply()
+            else prefs.edit().remove("pending_uri").apply()
+        }
 
     // ✅ SỬA: callback chỉ kiểm tra quyền thực tế, không dùng resultCode
     //         vì Settings không trả về RESULT_OK khi user bật quyền
@@ -85,7 +93,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                 "Bạn cần bật \"Cho phép cài ứng dụng từ nguồn không xác định\" để tiếp tục.\n\n" +
                         "Bấm \"Cấp quyền\" để mở Cài đặt, sau đó quay lại ứng dụng."
             )
-            .setPositiveButton("Cấp quyền") { _, _ ->
+            .setPositiveButton("CẤP QUYỀN NGAY") { _, _ ->
                 pendingInstallUri = uri
                 requestInstallPermission.launch(
                     Intent(
@@ -93,11 +101,6 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                         Uri.parse("package:$packageName")
                     )
                 )
-            }
-            .setNegativeButton("Bỏ qua") { d, _ ->
-                pendingInstallUri = null
-                d.dismiss()
-                showCustomToast("✅ File đã tải xong!\nKéo thông báo xuống → bấm vào để cài.", "#2E7D32")
             }
             .setCancelable(false)
             .create()
@@ -111,8 +114,6 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                 )
                 dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)
                     ?.setTextColor(android.graphics.Color.parseColor("#1565C0"))
-                dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEGATIVE)
-                    ?.setTextColor(android.graphics.Color.parseColor("#757575"))
             }
     }
 
@@ -170,6 +171,15 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             binding.tvToolbarVersion.text = "v$versionName"
         } catch (e: Exception) {
             binding.tvToolbarVersion.text = ""
+        }
+
+        // ✅ Khôi phục pendingInstallUri nếu app bị force stop / xóa RAM giữa chừng
+        val installPrefs = getSharedPreferences("install_prefs", MODE_PRIVATE)
+        val savedUri = installPrefs.getString("pending_uri", null)
+        if (savedUri != null) {
+            // Gán trực tiếp vào field (bypass setter) để tránh ghi lại SharedPreferences
+            // Kotlin không cho bypass setter của chính class → dùng setter bình thường
+            pendingInstallUri = android.net.Uri.parse(savedUri)
         }
 
         groupPagerAdapter = GroupPagerAdapter(this, emptyList())
@@ -252,6 +262,19 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         // Kiểm tra các file đã tải xong trong lúc user thoát app
         checkPendingDownloads()
         updateExpireBanner()
+        invalidateOptionsMenu() // ✅ Cập nhật nút toolbar mỗi lần resume
+
+        // ✅ Bắt đầu tick tự cập nhật banner hết hạn mỗi 60 giây
+        startExpireBannerTick()
+
+        // ✅ Nếu đang chờ cài APK mà user chưa cấp quyền → hiện lại dialog bắt buộc
+        val uri = pendingInstallUri
+        if (uri != null &&
+            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
+            !packageManager.canRequestPackageInstalls()
+        ) {
+            showRetryPermissionDialog(uri)
+        }
     }
 
     override fun onDestroy() {
@@ -262,6 +285,16 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         // ✅ Hủy job download nếu đang chạy
         downloadWatchJob?.cancel()
         downloadWatchJob = null
+        // ✅ Hủy job kiểm tra hết hạn app
+        stopAppExpireWatchJob()
+        // ✅ Dừng tick banner hết hạn
+        stopExpireBannerTick()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // ✅ Dừng tick khi app vào background — tránh lãng phí tài nguyên
+        stopExpireBannerTick()
     }
 
     /**
@@ -368,12 +401,26 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                 binding.tvTestState.text = getString(R.string.connection_test_testing)
                 mainViewModel.testCurrentServerRealPing()
 
-                // ✅ Auto update subscription ngầm sau khi VPN kết nối thành công
-                mainViewModel.autoUpdateSubSilent {
-                    setupGroupTab()
-                    updateExpireBanner()
+                // ✅ Auto update subscription ngầm sau khi VPN kết nối thành công (cooldown 30 phút)
+                val nowMs = System.currentTimeMillis()
+                if (nowMs - lastAutoUpdateMs >= AUTO_UPDATE_COOLDOWN_MS) {
+                    lastAutoUpdateMs = nowMs
+                    mainViewModel.autoUpdateSubSilent {
+                        setupGroupTab()
+                        refreshExpireBanner()
+                        showCustomToast("✅ Cập nhật máy chủ thành công!", "#2E7D32")
+                    }
                 }
+
+                // ✅ Bắt đầu kiểm tra hết hạn app định kỳ khi VPN bật
+                startAppExpireWatchJob()
             }
+
+            // Khi VPN vừa tắt (chuyển từ bật → tắt) → dừng job kiểm tra
+            if (!isRunning && wasRunning) {
+                stopAppExpireWatchJob()
+            }
+
             wasRunning = isRunning
         }
 
@@ -417,12 +464,256 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
     private fun handleFabAction() {
         if (mainViewModel.isRunning.value == true) {
+            // Luôn cho phép TẮT VPN dù hết hạn
             V2RayServiceManager.stopVService(this)
         } else {
+            // Ưu tiên check AppExpireManager (admin cài tay)
+            if (AppExpireManager.isExpired(this)) {
+                showAppExpiredDialog()
+                return
+            }
+            // Fallback: check ngày hết hạn từ sub link nếu admin chưa cài tay
+            if (AppExpireManager.getExpireTimestamp(this) == 0L) {
+                val subExpireTs = getSubLinkExpireTimestamp()
+                if (subExpireTs > 0L && System.currentTimeMillis() > subExpireTs) {
+                    showAppExpiredDialog(overrideExpireTs = subExpireTs)
+                    return
+                }
+            }
             val intent = VpnService.prepare(this)
             if (intent == null) startV2Ray()
             else requestVpnPermission.launch(intent)
         }
+    }
+
+    /**
+     * Lấy timestamp hết hạn từ sub link đang active.
+     * Trả về 0L nếu không có sub nào có expireDate.
+     */
+    private fun getSubLinkExpireTimestamp(): Long {
+        val subs = MmkvManager.decodeSubscriptions()
+        val activeSub = subs.firstOrNull {
+            it.subscription.enabled && it.subscription.expireDate != null
+        }
+        return (activeSub?.subscription?.expireDate ?: 0L) * 1000L  // giây → ms
+    }
+
+    /**
+     * Dialog thông báo app hết hạn — hiện khi user bấm FAB mà app đã hết hạn.
+     * @param overrideExpireTs Nếu truyền vào > 0, dùng timestamp này thay vì AppExpireManager
+     *                         (dùng khi hết hạn từ sub link, không phải cài tay)
+     */
+    private fun showAppExpiredDialog(overrideExpireTs: Long = 0L) {
+        val dp = resources.displayMetrics.density
+
+        // FrameLayout bọc ngoài để đặt nút X góc trên phải
+        val frame = android.widget.FrameLayout(this)
+
+        val root = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            val pad = (24 * dp).toInt()
+            setPadding(pad, (36 * dp).toInt(), pad, (20 * dp).toInt())
+        }
+
+        val btnX = android.widget.TextView(this).apply {
+            text = "✕"
+            textSize = 18f
+            setTextColor(android.graphics.Color.parseColor("#B71C1C"))
+            setPadding((8 * dp).toInt(), (4 * dp).toInt(), (8 * dp).toInt(), (4 * dp).toInt())
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.view.Gravity.TOP or android.view.Gravity.END
+            ).apply {
+                topMargin = (8 * dp).toInt()
+                marginEnd = (8 * dp).toInt()
+            }
+        }
+
+        frame.addView(root)
+        frame.addView(btnX)
+
+        // Icon lớn
+        root.addView(android.widget.TextView(this).apply {
+            text = "🔒"
+            textSize = 48f
+            gravity = android.view.Gravity.CENTER
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = (8 * dp).toInt() }
+        })
+
+        // Tiêu đề
+        root.addView(android.widget.TextView(this).apply {
+            text = "VPN Đã Hết Hạn"
+            textSize = 20f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            gravity = android.view.Gravity.CENTER
+            setTextColor(android.graphics.Color.parseColor("#B71C1C"))
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = (6 * dp).toInt() }
+        })
+
+        // Ngày hết hạn cụ thể
+        // Ngày hết hạn cụ thể — ưu tiên overrideExpireTs (từ sub link), fallback AppExpireManager
+        val expireTs = if (overrideExpireTs > 0L) overrideExpireTs else AppExpireManager.getExpireTimestamp(this)
+        val dateStr = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm:ss", java.util.Locale.getDefault())
+            .format(java.util.Date(expireTs))
+        root.addView(android.widget.TextView(this).apply {
+            text = "Hết hạn: $dateStr"
+            textSize = 15f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            gravity = android.view.Gravity.CENTER
+            setTextColor(android.graphics.Color.parseColor("#B71C1C"))
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = (20 * dp).toInt() }
+        })
+
+        // Divider
+        root.addView(android.view.View(this).apply {
+            setBackgroundColor(android.graphics.Color.parseColor("#FFCDD2"))
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT, (1 * dp).toInt()
+            ).apply { bottomMargin = (16 * dp).toInt() }
+        })
+
+        // Hộp thông báo nội dung
+        root.addView(android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            val padBox = (14 * dp).toInt()
+            setPadding(padBox, padBox, padBox, padBox)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(android.graphics.Color.parseColor("#FFF3E0"))
+                cornerRadius = 10 * dp
+                setStroke((1.5 * dp).toInt(), android.graphics.Color.parseColor("#FF8F00"))
+            }
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = (20 * dp).toInt() }
+
+            addView(android.widget.TextView(this@MainActivity).apply {
+                text = "🎁 Khách hàng gia hạn đủ 4 lần sẽ được sử dụng Vĩnh Viễn.\n\n" +
+                        "Liên hệ ngay với tôi để gia hạn."
+                textSize = 14f
+                setTextColor(android.graphics.Color.parseColor("#E91E63"))
+                gravity = android.view.Gravity.CENTER
+                setLineSpacing(0f, 1.4f)
+            })
+        })
+
+        val dialog = androidx.appcompat.app.AlertDialog.Builder(this)
+            .setView(frame)
+            .setCancelable(true)
+            .create()
+
+        btnX.setOnClickListener { dialog.dismiss() }
+
+        dialog.show()
+        dialog.window?.setBackgroundDrawable(
+            android.graphics.drawable.GradientDrawable().apply {
+                setColor(android.graphics.Color.WHITE)
+                cornerRadius = 24 * dp
+            }
+        )
+        dialog.window?.setLayout(
+            (resources.displayMetrics.widthPixels * 0.88).toInt(),
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+    }
+
+    /**
+     * Kiểm tra hết hạn tập trung — dùng cho MỌI chức năng import.
+     * Trả về true nếu đã hết hạn (đã hiện dialog thông báo), false nếu còn hạn.
+     */
+    private fun checkExpiredAndBlock(): Boolean {
+        if (!AppExpireManager.isExpired(this)) return false
+        showAppExpiredDialog()
+        return true
+    }
+
+    /**
+     * Bắt đầu job kiểm tra định kỳ mỗi 60 giây xem app có hết hạn không.
+     * Chỉ gọi khi VPN đang BẬT.
+     * Nếu phát hiện hết hạn → tự dừng VPN + hiện dialog.
+     */
+    private fun startAppExpireWatchJob() {
+        appExpireCheckJob?.cancel()
+        appExpireCheckJob = lifecycleScope.launch {
+            while (isActive) {
+                delay(60_000L)
+                val now = System.currentTimeMillis()
+
+                // Check 1: AppExpireManager (admin cài tay)
+                if (AppExpireManager.isExpired(this@MainActivity)) {
+                    if (mainViewModel.isRunning.value == true) {
+                        V2RayServiceManager.stopVService(this@MainActivity)
+                    }
+                    showAppExpiredDialog()
+                    break
+                }
+
+                // Check 2: Sub link expire (khi admin chưa cài tay)
+                if (AppExpireManager.getExpireTimestamp(this@MainActivity) == 0L) {
+                    val subExpireTs = getSubLinkExpireTimestamp()
+                    if (subExpireTs > 0L && now > subExpireTs) {
+                        if (mainViewModel.isRunning.value == true) {
+                            V2RayServiceManager.stopVService(this@MainActivity)
+                        }
+                        showAppExpiredDialog(overrideExpireTs = subExpireTs)
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Dừng job kiểm tra hết hạn — gọi khi VPN tắt hoặc activity destroy.
+     */
+    private fun stopAppExpireWatchJob() {
+        appExpireCheckJob?.cancel()
+        appExpireCheckJob = null
+    }
+
+    /**
+     * Tick mỗi 60 giây để tự cập nhật banner hết hạn ngay trên màn hình,
+     * không cần user tắt/mở lại app.
+     * Gọi trong onResume(), dừng trong onPause() + onDestroy().
+     */
+    private fun startExpireBannerTick() {
+        expireBannerTickJob?.cancel()
+        expireBannerTickJob = lifecycleScope.launch {
+            while (isActive) {
+                val expireTs = AppExpireManager.getExpireTimestamp(this@MainActivity).let {
+                    if (it > 0L) it else {
+                        val subs = MmkvManager.decodeSubscriptions()
+                        val sub = subs.firstOrNull { s -> s.subscription.enabled && s.subscription.expireDate != null }
+                        sub?.subscription?.expireDate?.times(1000L) ?: 0L
+                    }
+                }
+                val remaining = expireTs - System.currentTimeMillis()
+                when {
+                    remaining <= 0L -> {
+                        updateExpireBanner()
+                        break
+                    }
+                    remaining < 3_600_000L -> delay(1_000L)   // < 1 giờ → tick mỗi giây
+                    else -> delay(60_000L)                     // >= 1 giờ → tick mỗi phút
+                }
+                updateExpireBanner()
+            }
+        }
+    }
+
+    private fun stopExpireBannerTick() {
+        expireBannerTickJob?.cancel()
+        expireBannerTickJob = null
     }
 
     private fun startV2Ray() {
@@ -455,6 +746,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
     // ================= IMPORT =================
 
     fun importConfigViaSub() {
+        if (checkExpiredAndBlock()) return
         lifecycleScope.launch(Dispatchers.IO) {
             val result = mainViewModel.updateConfigViaSubAll()
             withContext(Dispatchers.Main) {
@@ -465,7 +757,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                         tabMediator = null
                         mainViewModel.reloadServerList()
                         setupGroupTab()
-                        updateExpireBanner()
+                        refreshExpireBanner()
                         toast(getString(R.string.title_update_subscription_result, result.configCount))
                     }
                     result.failureCount > 0 -> toastError(R.string.toast_update_sub_failure)
@@ -487,6 +779,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
     }
 
     private fun importQRcode() {
+        if (checkExpiredAndBlock()) return
         launchQRCodeScanner { result ->
             if (result != null) {
                 lifecycleScope.launch(Dispatchers.IO) {
@@ -499,6 +792,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                             setupGroupTab()
                             // ✅ Tự chọn server đầu tiên sau khi import QR
                             selectFirstServerIfNeeded()
+                            refreshExpireBanner()
                             if (subCount > 0) {
                                 toastSuccess(R.string.import_subscription_success)
                             } else {
@@ -514,6 +808,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
     }
 
     private fun importClipboard() {
+        if (checkExpiredAndBlock()) return
         lifecycleScope.launch(Dispatchers.IO) {
             val text = Utils.getClipboard(this@MainActivity)
             val (configCount, subCount) = AngConfigManager.importBatchConfig(text, "", false)
@@ -524,6 +819,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                     mainViewModel.reloadServerList()
                     setupGroupTab()
                     selectFirstServerIfNeeded()
+                    refreshExpireBanner()
                     if (subCount > 0) {
                         toastSuccess(R.string.import_subscription_success)
                     } else {
@@ -541,6 +837,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
      * onResume() sẽ tự reload server list sau khi dialog dismiss.
      */
     private fun importQrOtp() {
+        if (checkExpiredAndBlock()) return
         OtpUpdateDialog(this, onImportSuccess = {
             tabMediator?.detach()
             tabMediator = null
@@ -556,6 +853,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
      * onResume() sẽ tự reload server list sau khi dialog dismiss.
      */
     private fun importShopOtp() {
+        if (checkExpiredAndBlock()) return
         OtpShopDialog(this, onImportSuccess = {
             tabMediator?.detach()
             tabMediator = null
@@ -564,7 +862,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             setupGroupTab()
             binding.viewPager.setCurrentItem(0, false)
             selectFirstServerIfNeeded()
-            updateExpireBanner()
+            refreshExpireBanner()
         }).show()
     }
 
@@ -573,6 +871,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
      * onResume() sẽ tự reload server list sau khi dialog dismiss.
      */
     private fun importYearOtp() {
+        if (checkExpiredAndBlock()) return
         OtpYearDialog(this, onImportSuccess = {
             tabMediator?.detach()
             tabMediator = null
@@ -581,7 +880,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             setupGroupTab()
             binding.viewPager.setCurrentItem(0, false)
             selectFirstServerIfNeeded()
-            updateExpireBanner()
+            refreshExpireBanner()
         }).show()
     }
 
@@ -608,9 +907,12 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             item.title = spannable
         }
 
+        val colorRed    = android.graphics.Color.parseColor("#B71C1C")
+
         tintItem(R.id.update_tiktok,           colorBlue)
         tintItem(R.id.download_tiktok_plusgin, colorPurple)
         tintItem(R.id.update_yumvpn,           colorOrange)
+        tintItem(R.id.app_expire_setting,      colorRed)
     }
 
     /**
@@ -768,6 +1070,16 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
     // Job theo dõi trạng thái download hiện tại — hủy được khi cần
     private var downloadWatchJob: Job? = null
 
+    // Job kiểm tra hết hạn app định kỳ — chạy khi VPN đang bật
+    private var appExpireCheckJob: Job? = null
+
+    // Job tự cập nhật banner hết hạn mỗi 60 giây — luôn chạy khi app foreground
+    private var expireBannerTickJob: Job? = null
+
+    // Thời điểm lần cuối auto update sub — cooldown 30 phút
+    private var lastAutoUpdateMs: Long = 0L
+    private val AUTO_UPDATE_COOLDOWN_MS = 30 * 60 * 1000L  // 30 phút
+
     // Lưu các downloadId đang chạy — để onResume kiểm tra nếu user thoát app giữa chừng
     private val pendingDownloadIds = mutableMapOf<Long, String>() // downloadId → title
 
@@ -870,7 +1182,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             text = "Vui lòng chờ, đừng tắt ứng dụng..."
             textSize = 12f
             gravity = android.view.Gravity.CENTER
-            setTextColor(android.graphics.Color.parseColor("#757575"))
+            setTextColor(android.graphics.Color.parseColor("#1565C0"))
         }
 
         val tvNote = android.widget.TextView(this).apply {
@@ -1230,43 +1542,67 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
     // ================= MENU =================
 
+    /**
+     * Tìm và thay thế icon overflow (⋮) thành dấu + trên toolbar.
+     * Hỗ trợ nhiều Android version: tìm theo class name "Overflow" (API 21+)
+     * và fallback tìm ImageView cuối cùng trong ActionMenuView nếu không match.
+     */
+    private fun replaceOverflowIcon() {
+        try {
+            val dp = resources.displayMetrics.density
+            for (i in 0 until binding.toolbar.childCount) {
+                val view = binding.toolbar.getChildAt(i)
+                if (view is androidx.appcompat.widget.ActionMenuView) {
+                    var overflowView: android.widget.ImageView? = null
+
+                    // Ưu tiên: tìm theo class name chứa "Overflow"
+                    for (j in 0 until view.childCount) {
+                        val child = view.getChildAt(j)
+                        val simpleName = child.javaClass.simpleName
+                        if (simpleName.contains("Overflow", ignoreCase = true) ||
+                            simpleName.contains("OverflowMenuButton", ignoreCase = true)) {
+                            overflowView = child as? android.widget.ImageView
+                            break
+                        }
+                    }
+
+                    // Fallback: lấy ImageView cuối cùng trong ActionMenuView
+                    if (overflowView == null && view.childCount > 0) {
+                        val last = view.getChildAt(view.childCount - 1)
+                        if (last is android.widget.ImageView) {
+                            overflowView = last
+                        }
+                    }
+
+                    overflowView?.apply {
+                        setImageResource(R.drawable.ic_add_blue)
+                        imageTintList = android.content.res.ColorStateList.valueOf(
+                            android.graphics.Color.parseColor("#1565C0")
+                        )
+                        scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+                        val padH = (16 * dp).toInt()
+                        val padV = (8 * dp).toInt()
+                        setPadding(padH, padV, padH, padV)
+                        (layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.let { lp ->
+                            lp.marginEnd = (8 * dp).toInt()
+                            layoutParams = lp
+                        }
+                    }
+                    break
+                }
+            }
+        } catch (e: Exception) { }
+    }
+
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.menu_main, menu)
 
-        // ── Đổi icon overflow (3 chấm) → dấu + xanh đậm, ngay khi view sẵn sàng ──
-        binding.toolbar.viewTreeObserver.addOnGlobalLayoutListener(object :
-            android.view.ViewTreeObserver.OnGlobalLayoutListener {
-            override fun onGlobalLayout() {
-                binding.toolbar.viewTreeObserver.removeOnGlobalLayoutListener(this)
-                try {
-                    for (i in 0 until binding.toolbar.childCount) {
-                        val view = binding.toolbar.getChildAt(i)
-                        if (view is androidx.appcompat.widget.ActionMenuView) {
-                            for (j in 0 until view.childCount) {
-                                val child = view.getChildAt(j)
-                                if (child.javaClass.simpleName.contains("Overflow", ignoreCase = true)) {
-                                    (child as? android.widget.ImageView)?.apply {
-                                        setImageResource(R.drawable.ic_add_blue)
-                                        imageTintList = android.content.res.ColorStateList.valueOf(
-                                            android.graphics.Color.parseColor("#1565C0")
-                                        )
-                                        scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
-                                        val dp = resources.displayMetrics.density
-                                        val padH = (16 * dp).toInt()
-                                        val padV = (8 * dp).toInt()
-                                        setPadding(padH, padV, padH, padV)
-                                        (layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.let { lp ->
-                                            lp.marginEnd = (8 * dp).toInt()
-                                            layoutParams = lp
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } catch (e: Exception) { }
-            }
-        })
+        // Dùng post + postDelayed để đảm bảo toolbar render xong trên MỌI thiết bị thật
+        binding.toolbar.post {
+            binding.toolbar.postDelayed({
+                replaceOverflowIcon()
+            }, 150)
+        }
 
         return true
     }
@@ -1342,6 +1678,15 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         }
 
         return super.onPrepareOptionsMenu(menu)
+    }
+
+    // ✅ Debounce: chống double-tap mở 2 dialog liên tiếp
+    private var lastDialogOpenMs = 0L
+    private fun canOpenDialog(): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - lastDialogOpenMs < 600) return false
+        lastDialogOpenMs = now
+        return true
     }
 
     override fun onOptionsItemSelected(item: MenuItem) = when (item.itemId) {
@@ -1473,8 +1818,32 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             R.id.about -> {
                 startActivity(Intent(this, AboutActivity::class.java))
             }
+            R.id.app_expire_setting -> {
+                binding.drawerLayout.closeDrawer(GravityCompat.START)
+                // Mở thẳng dialog cài hạn — OTP chỉ hỏi khi bấm Lưu bên trong
+                AppExpireSettingDialog(this) {
+                    // Sau khi admin thay đổi ngày → cập nhật banner + kiểm tra ngay
+                    refreshExpireBanner()
+                    // Nếu vừa set ngày đã hết hạn → dừng VPN ngay
+                    if (AppExpireManager.isExpired(this) &&
+                        mainViewModel.isRunning.value == true
+                    ) {
+                        V2RayServiceManager.stopVService(this)
+                        showAppExpiredDialog()
+                    }
+                }.show()
+            }
         }
         return true
+    }
+
+    /**
+     * Gọi khi sub link thay đổi — cập nhật banner ngay và restart tick
+     * để tick dùng expireTs mới.
+     */
+    private fun refreshExpireBanner() {
+        updateExpireBanner()
+        startExpireBannerTick()
     }
 
     /**
@@ -1486,45 +1855,83 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
      * Không có sub nào có expireDate → ẩn banner.
      */
     private fun updateExpireBanner() {
+        val now = System.currentTimeMillis()
+        val sdf = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.getDefault())
+
+        // Helper: tính chuỗi "còn X ngày / X giờ / X phút / X giây"
+        fun formatTimeLeft(expireTs: Long): String {
+            val diffMs = expireTs - now
+            val diffDays = diffMs / (1000L * 60 * 60 * 24)
+            val diffHours = diffMs / (1000L * 60 * 60)
+            val diffMinutes = diffMs / (1000L * 60)
+            val diffSeconds = diffMs / 1000L
+            return when {
+                diffDays >= 1 -> "còn $diffDays ngày"
+                diffHours >= 1 -> "còn $diffHours giờ"
+                diffMinutes >= 1 -> "còn $diffMinutes phút"
+                diffSeconds >= 0 -> "còn $diffSeconds giây"
+                else -> ""
+            }
+        }
+
+        // ✅ Ưu tiên ngày hết hạn từ AppExpireManager (thiết bị đã cài)
+        val deviceExpireTs = AppExpireManager.getExpireTimestamp(this)
+        if (deviceExpireTs > 0L) {
+            val diffDays = (deviceExpireTs - now) / (1000L * 60 * 60 * 24)
+            val dateStr = sdf.format(java.util.Date(deviceExpireTs))
+            binding.tvToolbarExpire.visibility = android.view.View.VISIBLE
+            when {
+                now > deviceExpireTs -> {
+                    binding.tvToolbarExpire.text = "⏰ ĐÃ HẾT HẠN ($dateStr)"
+                    binding.tvToolbarExpire.setTextColor(android.graphics.Color.parseColor("#B71C1C"))
+                }
+                diffDays <= 7 -> {
+                    // Còn ≤ 7 ngày → hiện thêm đếm ngược để cảnh báo user
+                    binding.tvToolbarExpire.text = "⏰ $dateStr (${formatTimeLeft(deviceExpireTs)})"
+                    binding.tvToolbarExpire.setTextColor(android.graphics.Color.parseColor("#E65100"))
+                }
+                else -> {
+                    // Còn > 7 ngày → hiện "Hết hạn: ngày", màu cam đậm
+                    binding.tvToolbarExpire.text = "Hết hạn: $dateStr"
+                    binding.tvToolbarExpire.setTextColor(android.graphics.Color.parseColor("#E65100"))
+                }
+            }
+            return
+        }
+
+        // Fallback: lấy từ sub link nếu thiết bị chưa cài ngày hết hạn
         val subs = MmkvManager.decodeSubscriptions()
         val activeSub = subs.firstOrNull { it.subscription.enabled && it.subscription.expireDate != null }
 
         if (activeSub == null) {
-            binding.layoutExpireBanner.visibility = android.view.View.GONE
+            binding.tvToolbarExpire.visibility = android.view.View.GONE
             return
         }
 
         val expireTs = activeSub.subscription.expireDate!! * 1000L  // giây → ms
-        val now = System.currentTimeMillis()
         val diffDays = (expireTs - now) / (1000L * 60 * 60 * 24)
+        val sdfDate = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.getDefault())
+        val dateStr = sdfDate.format(java.util.Date(expireTs))
 
-        val sdf = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.getDefault())
-        val dateStr = sdf.format(java.util.Date(expireTs))
-
-        binding.layoutExpireBanner.visibility = android.view.View.VISIBLE
-
+        binding.tvToolbarExpire.visibility = android.view.View.VISIBLE
         when {
             now > expireTs -> {
-                binding.tvExpireDate.text = "ĐÃ HẾT HẠN ($dateStr)"
-                binding.tvExpireDate.setTextColor(android.graphics.Color.parseColor("#B71C1C"))
-                binding.layoutExpireBanner.setBackgroundColor(android.graphics.Color.parseColor("#FFEBEE"))
+                binding.tvToolbarExpire.text = "⏰ ĐÃ HẾT HẠN ($dateStr)"
+                binding.tvToolbarExpire.setTextColor(android.graphics.Color.parseColor("#B71C1C"))
             }
             diffDays <= 7 -> {
-                binding.tvExpireDate.text = "$dateStr (còn $diffDays ngày)"
-                binding.tvExpireDate.setTextColor(android.graphics.Color.parseColor("#E65100"))
-                binding.layoutExpireBanner.setBackgroundColor(android.graphics.Color.parseColor("#FFF3E0"))
+                // Còn ≤ 7 ngày → hiện thêm đếm ngược để cảnh báo user
+                binding.tvToolbarExpire.text = "⏰ $dateStr (${formatTimeLeft(expireTs)})"
+                binding.tvToolbarExpire.setTextColor(android.graphics.Color.parseColor("#E65100"))
             }
             else -> {
-                binding.tvExpireDate.text = "$dateStr (còn $diffDays ngày)"
-                binding.tvExpireDate.setTextColor(android.graphics.Color.parseColor("#1B5E20"))
-                binding.layoutExpireBanner.setBackgroundColor(android.graphics.Color.parseColor("#FFFFFF"))
+                // Còn > 7 ngày → hiện "Hết hạn: ngày", màu cam đậm
+                binding.tvToolbarExpire.text = "Hết hạn: $dateStr"
+                binding.tvToolbarExpire.setTextColor(android.graphics.Color.parseColor("#E65100"))
             }
         }
     }
 
-    /**
-     * Custom toast: nền màu tùy chỉnh, chữ trắng, hiện 4 giây (2x LENGTH_LONG liên tiếp).
-     */
     private fun showCustomToast(message: String, colorHex: String = "#B71C1C") {
         val dp = resources.displayMetrics.density
         val color = android.graphics.Color.parseColor(colorHex)

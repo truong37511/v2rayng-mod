@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.GravityCompat
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
+import com.v2ray.ang.util.AnnouncementFetcher
 import com.google.android.material.navigation.NavigationView
 import com.google.android.material.tabs.TabLayoutMediator
 import com.v2ray.ang.AppConfig
@@ -267,6 +268,9 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         // ✅ Bắt đầu tick tự cập nhật banner hết hạn mỗi 60 giây
         startExpireBannerTick()
 
+        // ✅ Fetch thông báo từ web admin
+        fetchAnnouncement()
+
         // ✅ Nếu đang chờ cài APK mà user chưa cấp quyền → hiện lại dialog bắt buộc
         val uri = pendingInstallUri
         if (uri != null &&
@@ -289,6 +293,9 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         stopAppExpireWatchJob()
         // ✅ Dừng tick banner hết hạn
         stopExpireBannerTick()
+        // ✅ Hủy job fetch thông báo
+        announcementJob?.cancel()
+        announcementJob = null
     }
 
     override fun onPause() {
@@ -409,6 +416,8 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                         setupGroupTab()
                         refreshExpireBanner()
                         showCustomToast("✅ Cập nhật máy chủ thành công!", "#2E7D32")
+                        // ✅ Fetch thông báo mới từ web admin sau khi update sub xong
+                        fetchAnnouncement()
                     }
                 }
 
@@ -1072,6 +1081,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
     // Job kiểm tra hết hạn app định kỳ — chạy khi VPN đang bật
     private var appExpireCheckJob: Job? = null
+    private var announcementJob: Job? = null
 
     // Job tự cập nhật banner hết hạn mỗi 60 giây — luôn chạy khi app foreground
     private var expireBannerTickJob: Job? = null
@@ -1341,15 +1351,18 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
     /**
      * Tải Tiktok APK qua DownloadManager + hiện dialog hướng dẫn đồng thời.
+     * ✅ FIX: Thêm timestamp vào URL + fileName để bypass cache DownloadManager Android
+     *         (Android cache file theo tên → cùng tên = dùng file cũ dù server đã cập nhật)
      */
     private fun downloadTiktok() {
         if (!canDownloadToday("tiktok")) {
             showDownloadLimitDialog("Hôm nay bạn đã tải TikTok rồi!\n\nKiểm tra trong thư mục Downloads để cài.")
             return
         }
+        val ts = System.currentTimeMillis()
         startDownloadOnce(
-            url        = "https://vutruongvpn.com/downloads/tiktok.apk",
-            fileName   = "tiktok_update.apk",
+            url        = "https://vutruongvpn.com/downloads/tiktok.apk?v=$ts",
+            fileName   = "tiktok_$ts.apk",
             title      = "Cập nhật Tiktok",
             prefKey    = "tiktok"
         )
@@ -1357,15 +1370,18 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
     /**
      * Tải Tiktok Plusgin APK qua DownloadManager + hiện dialog hướng dẫn đồng thời.
+     * ✅ FIX: Thêm timestamp vào URL + fileName để bypass cache DownloadManager Android
+     *         (Android cache file theo tên → cùng tên = dùng file cũ dù server đã cập nhật)
      */
     private fun downloadTiktokPlusgin() {
         if (!canDownloadToday("tiktokplusgin")) {
             showDownloadLimitDialog("Hôm nay bạn đã tải TikTok Plusgin rồi!\n\nKiểm tra trong thư mục Downloads để cài.")
             return
         }
+        val ts = System.currentTimeMillis()
         startDownloadOnce(
-            url        = "https://vutruongvpn.com/downloads/tiktokplusgin.apk",
-            fileName   = "tiktokplusgin.apk",
+            url        = "https://vutruongvpn.com/downloads/tiktokplusgin.apk?v=$ts",
+            fileName   = "tiktokplusgin_$ts.apk",
             title      = "Tải Tiktok Plusgin",
             prefKey    = "tiktokplusgin"
         )
@@ -1373,15 +1389,18 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
     /**
      * Tải Yum VPN APK qua DownloadManager → hiện thông báo khi xong.
+     * ✅ FIX: Thêm timestamp vào URL + fileName để bypass cache DownloadManager Android
+     *         (Android cache file theo tên → cùng tên = dùng file cũ dù server đã cập nhật)
      */
     private fun downloadYumVpn() {
         if (!canDownloadToday("yumvpn")) {
             showDownloadLimitDialog("Hôm nay bạn đã tải Yum VPN rồi!\n\nKiểm tra trong thư mục Downloads để cài.")
             return
         }
+        val ts = System.currentTimeMillis()
         startDownloadOnce(
-            url      = "https://vutruongvpn.com/downloads/yumvpn.apk",
-            fileName = "yumvpn_update.apk",
+            url      = "https://vutruongvpn.com/downloads/yumvpn.apk?v=$ts",
+            fileName = "yumvpn_$ts.apk",
             title    = "Cập nhật Yum VPN",
             prefKey  = "yumvpn"
         )
@@ -1854,6 +1873,53 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
      *   - Đã hết hạn    → nền đỏ nhạt,     chữ đỏ đậm
      * Không có sub nào có expireDate → ẩn banner.
      */
+    // ─────────────────────────────────────────────────────────────────
+    // THÔNG BÁO CHẠY NGANG TỪ WEB ADMIN
+    // ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Gọi API lấy thông báo → hiện/ẩn marquee bar ngay dưới tab.
+     * Gọi mỗi lần onResume() để luôn cập nhật.
+     */
+    private fun fetchAnnouncement() {
+        announcementJob?.cancel()
+        announcementJob = lifecycleScope.launch {
+            // Lặp vô tận: fetch ngay lần đầu, sau đó mỗi 1 phút fetch lại
+            // → thông báo luôn cập nhật kể cả khi user không tắt đa nhiệm
+            // → interval xoay vòng tin nhắn được cài trên web admin
+            while (true) {
+                when (val result = AnnouncementFetcher.fetchAnnouncement()) {
+                    is AnnouncementFetcher.FetchResult.Success -> {
+                        binding.tvAnnouncement.apply {
+                            text = "  📢  ${result.message}          "
+                            try {
+                                setBackgroundColor(android.graphics.Color.parseColor(result.color))
+                                setTextColor(android.graphics.Color.parseColor(result.textColor))
+                            } catch (e: Exception) {
+                                setBackgroundColor(android.graphics.Color.parseColor("#E65100"))
+                                setTextColor(android.graphics.Color.WHITE)
+                            }
+                            visibility = android.view.View.VISIBLE
+                            isSelected = true
+                            post {
+                                isSelected = false
+                                isSelected = true
+                            }
+                        }
+                    }
+                    is AnnouncementFetcher.FetchResult.Hidden -> {
+                        binding.tvAnnouncement.visibility = android.view.View.GONE
+                    }
+                    is AnnouncementFetcher.FetchResult.Error -> {
+                        // Lỗi mạng → giữ nguyên trạng thái cũ, không thay đổi UI
+                    }
+                }
+                // App gọi API mỗi 1 phút — đủ để bắt kịp thay đổi từ web admin
+                delay(60 * 1000L)
+            }
+        }
+    }
+
     private fun updateExpireBanner() {
         val now = System.currentTimeMillis()
         val sdf = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.getDefault())

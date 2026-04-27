@@ -6,7 +6,6 @@ import android.text.TextUtils
 import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
-import android.view.View
 import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.appcompat.widget.SearchView
@@ -43,16 +42,11 @@ class PerAppProxyActivity : BaseActivity() {
         super.onCreate(savedInstanceState)
         setContentViewWithToolbar(binding.root, showHomeAsUp = true, title = getString(R.string.per_app_proxy_settings))
 
-        // Ẩn toàn bộ nội dung, yêu cầu OTP trước
-        binding.root.visibility = View.INVISIBLE
-
-        OtpDialog.show(this, onSuccess = {
-            // Verify thành công → hiện nội dung và khởi tạo màn hình
-            binding.root.visibility = View.VISIBLE
-            addCustomDividerToRecyclerView(binding.recyclerView, this, R.drawable.custom_divider)
-            initList()
-            setupSwitches()
-        })
+        // AdminOtpDialog đã được xác minh từ MainActivity trước khi vào màn hình này
+        // → Không cần hỏi OTP lần 2 ở đây nữa
+        addCustomDividerToRecyclerView(binding.recyclerView, this, R.drawable.custom_divider)
+        initList()
+        setupSwitches()
     }
 
     private fun setupSwitches() {

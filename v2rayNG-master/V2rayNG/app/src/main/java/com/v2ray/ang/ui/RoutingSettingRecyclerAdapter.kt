@@ -1,21 +1,15 @@
 package com.v2ray.ang.ui
 
-import android.app.AlertDialog
 import android.graphics.Color
-import android.text.InputFilter
-import android.text.InputType
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.EditText
-import android.widget.Toast
 import androidx.core.view.isVisible
 import androidx.recyclerview.widget.RecyclerView
 import com.v2ray.ang.contracts.BaseAdapterListener
 import com.v2ray.ang.databinding.ItemRecyclerRoutingSettingBinding
 import com.v2ray.ang.helper.ItemTouchHelperAdapter
 import com.v2ray.ang.helper.ItemTouchHelperViewHolder
-import com.v2ray.ang.util.OtpManager
 import com.v2ray.ang.viewmodel.RoutingSettingsViewModel
 
 class RoutingSettingRecyclerAdapter(
@@ -31,7 +25,8 @@ class RoutingSettingRecyclerAdapter(
         val ruleset = rulesets[position]
 
         holder.itemRoutingSettingBinding.remarks.text = ruleset.remarks
-        holder.itemRoutingSettingBinding.domainIp.text = (ruleset.domain ?: ruleset.ip ?: ruleset.port)?.toString()
+        holder.itemRoutingSettingBinding.domainIp.text =
+            (ruleset.domain ?: ruleset.ip ?: ruleset.port)?.toString()
         holder.itemRoutingSettingBinding.outboundTag.text = ruleset.outboundTag
         holder.itemRoutingSettingBinding.chkEnable.isChecked = ruleset.enabled
         holder.itemRoutingSettingBinding.imgLocked.isVisible = ruleset.locked == true
@@ -48,30 +43,17 @@ class RoutingSettingRecyclerAdapter(
             switchView.isChecked = !isChecked
 
             val context = holder.itemView.context
-            val editText = EditText(context).apply {
-                hint = "Nhập mã OTP 6 số"
-                inputType = InputType.TYPE_CLASS_NUMBER
-                filters = arrayOf(InputFilter.LengthFilter(6))
-            }
+            val action = if (isChecked) "bật" else "tắt"
 
-            AlertDialog.Builder(context)
-                .setTitle("Xác thực OTP")
-                .setMessage("Nhập mã từ Google Authenticator để ${if (isChecked) "bật" else "tắt"} sub")
-                .setView(editText)
-                .setPositiveButton("Xác nhận") { _, _ ->
-                    val input = editText.text.toString()
-                    if (OtpManager.verify(input)) {
-                        // ✅ OTP đúng → thực sự toggle
-                        switchView.isChecked = isChecked
-                        ruleset.enabled = isChecked
-                        viewModel.update(position, ruleset)
-                    } else {
-                        // ❌ OTP sai
-                        Toast.makeText(context, "Mã OTP không đúng!", Toast.LENGTH_SHORT).show()
-                    }
-                }
-                .setNegativeButton("Huỷ", null)
-                .show()
+            AdminOtpDialog(
+                context = context,
+                title = "Xác minh để $action rule"
+            ) {
+                // ✅ OTP đúng → thực sự toggle
+                switchView.isChecked = isChecked
+                ruleset.enabled = isChecked
+                viewModel.update(position, ruleset)
+            }.show()
         }
     }
 
@@ -108,6 +90,5 @@ class RoutingSettingRecyclerAdapter(
         adapterListener?.onRefreshData()
     }
 
-    override fun onItemDismiss(position: Int) {
-    }
+    override fun onItemDismiss(position: Int) {}
 }

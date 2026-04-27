@@ -22,10 +22,6 @@
             android:title="Cập nhật app VPN" />
 
         <item
-            android:id="@+id/per_app_proxy_settings"
-            android:icon="@drawable/ic_per_apps_24dp"
-            android:title="@string/per_app_proxy_settings" />
-        <item
             android:id="@+id/routing_setting"
             android:icon="@drawable/ic_routing_24dp"
             android:title="@string/routing_settings_title"
@@ -36,13 +32,14 @@
             android:title="@string/title_user_asset_setting"
             android:visible="false" />
         <item
-            android:id="@+id/settings"
-            android:icon="@drawable/ic_settings_24dp"
-            android:title="@string/title_settings" />
-        <item
             android:id="@+id/app_expire_setting"
             android:icon="@drawable/ic_expire_24dp"
             android:title="Cài hạn sử dụng App" />
+        <!-- ✅ THÊM MỚI: Thống kê dung lượng sub link -->
+        <item
+            android:id="@+id/sub_data_usage"
+            android:icon="@drawable/ic_data_usage_24dp"
+            android:title="Thống kê dung lượng" />
     </group>
 
     <group android:id="@+id/group_id2">
@@ -66,6 +63,14 @@
             android:icon="@drawable/ic_restore_24dp"
             android:title="@string/title_configuration_backup_restore"
             android:visible="false" />
+        <item
+            android:id="@+id/per_app_proxy_settings"
+            android:icon="@drawable/ic_per_apps_24dp"
+            android:title="@string/per_app_proxy_settings" />
+        <item
+            android:id="@+id/settings"
+            android:icon="@drawable/ic_settings_24dp"
+            android:title="@string/title_settings" />
         <item
             android:id="@+id/about"
             android:icon="@drawable/ic_about_24dp"

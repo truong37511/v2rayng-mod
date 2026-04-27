@@ -8,10 +8,14 @@ import com.v2ray.ang.handler.SettingsChangeManager
 class PerAppProxyViewModel : ViewModel() {
 
     companion object {
-        // 2 app WeeChat mặc định luôn bypass VPN
+        // App nội địa Trung Quốc mặc định bypass VPN (dùng mạng thường, không đi qua VPN)
+        // Lý do: các app này detect IP nước ngoài → dể khóa tài khoản nếu dùng VPN
         val DEFAULT_BYPASS_APPS = listOf(
-            "com.ubergeek42.WeechatAndroid.dev", // bản Play Store / Aptoide
-            "com.ubergeek42.WeechatAndroid"      // bản F-Droid
+            "com.tencent.mm",                // WeChat
+            "com.eg.android.AlipayGphone",   // Alipay
+            "com.taobao.taobao",             // Taobao
+            "com.jingdong.app.mall",         // JD.com
+            "com.ss.android.ugc.aweme"       // Douyin (抖音 - TikTok Trung Quốc)
         )
     }
 
@@ -20,7 +24,7 @@ class PerAppProxyViewModel : ViewModel() {
     } ?: HashSet()
 
     init {
-        // Auto thêm 2 app WeeChat mặc định nếu chưa có
+        // Auto thêm các app nội địa TQ mặc định nếu chưa có
         val changed = blacklist.addAll(DEFAULT_BYPASS_APPS)
         if (changed) save()
     }

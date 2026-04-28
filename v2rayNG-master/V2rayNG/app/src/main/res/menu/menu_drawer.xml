@@ -35,11 +35,7 @@
             android:id="@+id/app_expire_setting"
             android:icon="@drawable/ic_expire_24dp"
             android:title="Cài hạn sử dụng App" />
-        <!-- ✅ THÊM MỚI: Thống kê dung lượng sub link -->
-        <item
-            android:id="@+id/sub_data_usage"
-            android:icon="@drawable/ic_data_usage_24dp"
-            android:title="Thống kê dung lượng" />
+
     </group>
 
     <group android:id="@+id/group_id2">

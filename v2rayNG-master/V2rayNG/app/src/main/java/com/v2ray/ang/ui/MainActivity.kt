@@ -935,6 +935,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         tintItem(R.id.update_tiktok,           colorBlue)
         tintItem(R.id.download_tiktok_plusgin, colorBlue)
         tintItem(R.id.update_yumvpn,           colorBlue)
+        tintItem(R.id.tiktok_downloader,       colorOrange)
         tintItem(R.id.app_expire_setting,      colorRed)
     }
 
@@ -1778,6 +1779,900 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         else -> super.onOptionsItemSelected(item)
     }
 
+    /**
+     * Hiện dialog native tải TikTok không logo.
+     * Gọi API tikwm.com, hiện thông tin video, tải bằng DownloadManager.
+     * Không dùng WebView / HTML.
+     */
+    private fun showTikTokDownloaderDialog() {
+        val dp = resources.displayMetrics.density
+        val p16 = (16 * dp).toInt()
+        val p12 = (12 * dp).toInt()
+
+        // ── Root layout ──────────────────────────────────────────────────
+        val root = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(p16, p16, p16, p16)
+        }
+
+        // ── Tiêu đề ──────────────────────────────────────────────────────
+        root.addView(android.widget.TextView(this).apply {
+            text = "⬇️  Tải TikTok không Logo"
+            textSize = 15f
+            typeface = android.graphics.Typeface.DEFAULT
+            setTextColor(android.graphics.Color.parseColor("#E65100"))
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = (14 * dp).toInt() }
+        })
+
+        // ── Input URL + nút Dán / X (nằm BÊN TRONG input, góc phải) ────────
+        // Dùng FrameLayout để overlay nút lên trên EditText
+        val inputFrame = android.widget.FrameLayout(this).apply {
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = (10 * dp).toInt() }
+        }
+
+        // Padding phải của input = đủ chỗ cho nút bên trong
+        val btnAreaWidth = (70 * dp).toInt()
+
+        val etUrl = android.widget.EditText(this).apply {
+            hint = "Dán link TikTok vào đây..."
+            textSize = 14f
+            setTextColor(android.graphics.Color.parseColor("#1A1F36"))
+            setHintTextColor(android.graphics.Color.parseColor("#9E9E9E"))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(android.graphics.Color.parseColor("#F5F7FF"))
+                cornerRadius = 12 * dp
+                setStroke((1.5 * dp).toInt(), android.graphics.Color.parseColor("#C5CAE9"))
+            }
+            // Padding phải rộng hơn để text không chồng lên nút
+            setPadding(p12, p12, btnAreaWidth, p12)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+            maxLines = 2
+            minHeight = (46 * dp).toInt()
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        // Nút Dán — overlay bên phải, căn giữa theo chiều dọc
+        val btnPaste = android.widget.Button(this).apply {
+            text = "DÁN"
+            textSize = 11f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(android.graphics.Color.parseColor("#3b82f6"))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(android.graphics.Color.WHITE)
+                cornerRadius = 999 * dp
+                setStroke((1.5 * dp).toInt(), android.graphics.Color.parseColor("#3b82f6"))
+            }
+            stateListAnimator = null
+            val pH = (10 * dp).toInt()
+            val pV = (2 * dp).toInt()
+            setPadding(pH, pV, pH, pV)
+            minHeight = 0
+            minimumHeight = 0
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                (32 * dp).toInt(),
+                android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL
+            ).apply { rightMargin = (8 * dp).toInt() }
+        }
+
+        // Nút X — overlay bên phải, căn giữa theo chiều dọc, ẩn mặc định
+        val btnClear = android.widget.Button(this).apply {
+            text = "✕"
+            textSize = 11f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(android.graphics.Color.parseColor("#ef4444"))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(android.graphics.Color.parseColor("#fee2e2"))
+                cornerRadius = 999 * dp
+            }
+            stateListAnimator = null
+            minHeight = 0
+            minimumHeight = 0
+            setPadding(0, 0, 0, 0)
+            val sz = (26 * dp).toInt()
+            layoutParams = android.widget.FrameLayout.LayoutParams(sz, sz,
+                android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL
+            ).apply { rightMargin = (10 * dp).toInt() }
+            visibility = android.view.View.GONE
+        }
+
+        inputFrame.addView(etUrl)
+        inputFrame.addView(btnPaste)
+        inputFrame.addView(btnClear)
+        root.addView(inputFrame)
+
+        // ── Status text (loading / error) ─────────────────────────────────
+        val tvStatus = android.widget.TextView(this).apply {
+            textSize = 13f
+            visibility = android.view.View.GONE
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = (10 * dp).toInt() }
+        }
+        root.addView(tvStatus)
+
+        // ── Card kết quả ──────────────────────────────────────────────────
+        val cardResult = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            visibility = android.view.View.GONE
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(android.graphics.Color.parseColor("#F5F7FF"))
+                cornerRadius = 14 * dp
+                setStroke((1 * dp).toInt(), android.graphics.Color.parseColor("#C5CAE9"))
+            }
+            setPadding(p12, p12, p12, p12)
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        root.addView(cardResult)
+
+        // ── Thumbnail + meta row ──────────────────────────────────────────
+        val metaRow = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = (12 * dp).toInt() }
+        }
+
+        val ivThumb = android.widget.ImageView(this).apply {
+            scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(android.graphics.Color.parseColor("#E8EAF6"))
+                cornerRadius = 8 * dp
+            }
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                (64 * dp).toInt(), (84 * dp).toInt()
+            ).apply { rightMargin = (12 * dp).toInt() }
+        }
+
+        val metaText = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+            )
+        }
+
+        val tvTitle = android.widget.TextView(this).apply {
+            textSize = 13f
+            setTextColor(android.graphics.Color.parseColor("#1A1F36"))
+            maxLines = 3
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = (6 * dp).toInt() }
+        }
+
+        val tvMeta = android.widget.TextView(this).apply {
+            textSize = 11f
+            setTextColor(android.graphics.Color.parseColor("#5C6BC0"))
+        }
+
+        metaText.addView(tvTitle)
+        metaText.addView(tvMeta)
+        metaRow.addView(ivThumb)
+        metaRow.addView(metaText)
+        cardResult.addView(metaRow)
+
+        // ── Nút tải video ─────────────────────────────────────────────────
+        val btnDownload = android.widget.Button(this).apply {
+            text = "⬇️  Tải video chất lượng gốc"
+            textSize = 13f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(android.graphics.Color.parseColor("#E65100"))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(android.graphics.Color.WHITE)
+                cornerRadius = 999 * dp  // bo pill
+                setStroke((1.5 * dp).toInt(), android.graphics.Color.parseColor("#E65100"))
+            }
+            val pH = (20 * dp).toInt()
+            val pV = (9 * dp).toInt()
+            setPadding(pH, pV, pH, pV)
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            stateListAnimator = null
+        }
+        cardResult.addView(btnDownload)
+
+        // ── Footer: nút Đóng + text ghi chú ──────────────────────────────
+        val footerRow = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (12 * dp).toInt() }
+        }
+
+        val btnClose = android.widget.Button(this).apply {
+            text = "Đóng"
+            textSize = 13f
+            setTextColor(android.graphics.Color.parseColor("#E65100"))
+            background = null
+            stateListAnimator = null
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        val tvNote = android.widget.TextView(this).apply {
+            text = "Chỉ hỗ trợ TikTok Việt Nam"
+            textSize = 11f
+            setTextColor(android.graphics.Color.parseColor("#94a3b8"))
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+            )
+        }
+
+        footerRow.addView(tvNote)
+        footerRow.addView(btnClose)
+        root.addView(footerRow)
+
+        // ── ScrollView bọc toàn bộ ───────────────────────────────────────
+        val scroll = android.widget.ScrollView(this).apply {
+            addView(root)
+        }
+
+        // ── Dialog ───────────────────────────────────────────────────────
+        val dialog = androidx.appcompat.app.AlertDialog.Builder(this)
+            .setView(scroll)
+            .setCancelable(true)
+            .create()
+
+        btnClose.setOnClickListener { dialog.dismiss() }
+
+        // ── Helper: hiện status ───────────────────────────────────────────
+        fun showStatus(msg: String, isError: Boolean = false) {
+            tvStatus.text = msg
+            tvStatus.setTextColor(
+                if (isError) android.graphics.Color.parseColor("#B71C1C")
+                else android.graphics.Color.parseColor("#3949AB")
+            )
+            tvStatus.visibility = android.view.View.VISIBLE
+        }
+        fun hideStatus() { tvStatus.visibility = android.view.View.GONE }
+
+        // ── Lưu videoUrl để btnDownload dùng ─────────────────────────────
+        var currentVideoUrl = ""
+
+        // ── Tải thumbnail từ URL (chạy trên IO thread) ───────────────────
+        fun loadThumb(url: String) {
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 5_000
+                    conn.readTimeout = 5_000
+                    conn.connect()
+                    val bmp = android.graphics.BitmapFactory.decodeStream(conn.inputStream)
+                    conn.disconnect()
+                    withContext(Dispatchers.Main) {
+                        if (bmp != null) {
+                            // Bo tròn ảnh thumbnail
+                            val rounded = android.graphics.Bitmap.createBitmap(bmp.width, bmp.height, bmp.config ?: android.graphics.Bitmap.Config.ARGB_8888)
+                            val canvas = android.graphics.Canvas(rounded)
+                            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+                            paint.shader = android.graphics.BitmapShader(bmp, android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP)
+                            canvas.drawRoundRect(android.graphics.RectF(0f, 0f, bmp.width.toFloat(), bmp.height.toFloat()), 16 * dp, 16 * dp, paint)
+                            ivThumb.setImageBitmap(rounded)
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        // ── Job fetch có thể cancel ───────────────────────────────────────
+        var fetchJob: kotlinx.coroutines.Job? = null
+
+        // ── Helper kiểm tra link hợp lệ ──────────────────────────────────
+        fun isValidVideoUrl(text: String) = text.contains("tiktok.com") ||
+                text.contains("vm.tiktok") || text.contains("vt.tiktok")
+
+        // ── Gọi API tikwm ─────────────────────────────────────────────────
+        fun fetchVideo() {
+            val url = etUrl.text.toString().trim()
+            if (url.isEmpty()) return
+            if (!isValidVideoUrl(url)) {
+                showStatus("❌ Link không hợp lệ (chỉ hỗ trợ TikTok)", isError = true)
+                return
+            }
+
+            // Hủy fetch trước nếu đang chạy
+            fetchJob?.cancel()
+            cardResult.visibility = android.view.View.GONE
+            showStatus("⏳ Đang tìm video...")
+
+            fetchJob = lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    val apiUrl = "https://www.tikwm.com/api/?url=${java.net.URLEncoder.encode(url, "UTF-8")}&hd=1"
+                    // Timeout 40 giây
+                    val result = kotlinx.coroutines.withTimeout(40_000L) {
+                        val conn = java.net.URL(apiUrl).openConnection() as java.net.HttpURLConnection
+                        conn.connectTimeout = 40_000
+                        conn.readTimeout = 40_000
+                        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+                        conn.connect()
+                        val body = conn.inputStream.bufferedReader().readText()
+                        conn.disconnect()
+                        body
+                    }
+
+                    val json = org.json.JSONObject(result)
+                    if (json.optInt("code", -1) != 0 || !json.has("data")) {
+                        val msg = json.optString("msg", "").lowercase()
+                        // Rate limit → tự động retry sau 2 giây, không báo lỗi ra ngoài
+                        if (msg.contains("limit") || msg.contains("too many") || msg.contains("frequent")) {
+                            delay(2_000)
+                            // Gọi lại API lần 2
+                            val retryConn = java.net.URL(apiUrl).openConnection() as java.net.HttpURLConnection
+                            retryConn.connectTimeout = 40_000
+                            retryConn.readTimeout = 40_000
+                            retryConn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+                            retryConn.connect()
+                            val retryBody = retryConn.inputStream.bufferedReader().readText()
+                            retryConn.disconnect()
+                            val retryJson = org.json.JSONObject(retryBody)
+                            if (retryJson.optInt("code", -1) != 0 || !retryJson.has("data")) {
+                                withContext(Dispatchers.Main) {
+                                    showStatus("❌ Không lấy được video, thử lại sau!", isError = true)
+                                }
+                                return@launch
+                            }
+                            // Retry thành công → tiếp tục xử lý với retryJson
+                            val data = retryJson.getJSONObject("data")
+                            val rawDesc = data.optString("desc").ifEmpty {
+                                data.optString("text").ifEmpty { data.optString("title", "") }
+                            }
+                            val title = rawDesc.split("#").first().trim().ifEmpty { "Video TikTok" }
+                            val cover = data.optString("cover").ifEmpty { data.optString("origin_cover", "") }
+                            val likes    = data.optLong("digg_count").takeIf { it > 0L } ?: data.optLong("like_count", 0L)
+                            val comments = data.optLong("comment_count", 0L)
+                            val plays    = data.optLong("play_count").takeIf { it > 0L } ?: data.optLong("view_count", 0L)
+                            val hdUrl = data.optString("hdplay").ifEmpty {
+                                data.optString("play").ifEmpty { data.optString("wmplay", "") }
+                            }
+                            withContext(Dispatchers.Main) {
+                                hideStatus()
+                                if (hdUrl.isEmpty()) { showStatus("❌ Không tìm thấy link tải", isError = true); return@withContext }
+                                currentVideoUrl = hdUrl
+                                tvTitle.text = title
+                                fun fmtNum(n: Long) = when { n >= 1_000_000 -> "%.1fM".format(n/1_000_000.0); n >= 1_000 -> "%.1fK".format(n/1_000.0); else -> n.toString() }
+                                tvMeta.text = "❤️ ${fmtNum(likes)}   💬 ${fmtNum(comments)}   👁 ${fmtNum(plays)}"
+                                if (cover.isNotEmpty()) loadThumb(cover)
+                                cardResult.visibility = android.view.View.VISIBLE
+                            }
+                            return@launch
+                        }
+                        // Lỗi khác
+                        withContext(Dispatchers.Main) {
+                            showStatus("❌ Không lấy được video, thử lại sau!", isError = true)
+                        }
+                        return@launch
+                    }
+
+                    val data = json.getJSONObject("data")
+                    // desc chứa cả caption + hashtag, cần tách bỏ hashtag
+                    // Lấy phần text trước hashtag đầu tiên; nếu không có text thì dùng toàn bộ
+                    val rawDesc = data.optString("desc").ifEmpty {
+                        data.optString("text").ifEmpty {
+                            data.optString("title", "")
+                        }
+                    }
+                    val title = rawDesc
+                        .split("#").first()   // cắt bỏ từ # đầu tiên trở đi
+                        .trim()
+                        .ifEmpty {
+                            // Toàn bộ là hashtag, không có caption → hiện "Video TikTok"
+                            "Video TikTok"
+                        }
+                    // Cover fallback: cover → origin_cover
+                    val cover = data.optString("cover").ifEmpty { data.optString("origin_cover", "") }
+                    // Stats giống HTML
+                    val likes    = data.optLong("digg_count").takeIf { it > 0L } ?: data.optLong("like_count", 0L)
+                    val comments = data.optLong("comment_count", 0L)
+                    val plays    = data.optLong("play_count").takeIf { it > 0L } ?: data.optLong("view_count", 0L)
+                    // URL HD → SD fallback → wmplay
+                    val hdUrl = data.optString("hdplay").ifEmpty {
+                        data.optString("play").ifEmpty { data.optString("wmplay", "") }
+                    }
+
+                    withContext(Dispatchers.Main) {
+                        hideStatus()
+
+                        if (hdUrl.isEmpty()) {
+                            showStatus("❌ Không tìm thấy link tải", isError = true)
+                            return@withContext
+                        }
+
+                        currentVideoUrl = hdUrl
+
+                        // Điền meta
+                        tvTitle.text = title
+
+                        fun fmtNum(n: Long): String = when {
+                            n >= 1_000_000 -> "%.1fM".format(n / 1_000_000.0)
+                            n >= 1_000     -> "%.1fK".format(n / 1_000.0)
+                            else           -> n.toString()
+                        }
+                        tvMeta.text = "❤️ ${fmtNum(likes)}   💬 ${fmtNum(comments)}   👁 ${fmtNum(plays)}"
+
+                        if (cover.isNotEmpty()) loadThumb(cover)
+                        cardResult.visibility = android.view.View.VISIBLE
+                    }
+                } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                    withContext(Dispatchers.Main) {
+                        showStatus("❌ Quá thời gian chờ (40s) — kiểm tra lại mạng!", isError = true)
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        showStatus("❌ Lỗi kết nối — thử lại sau!", isError = true)
+                    }
+                }
+            }
+        }
+
+        // ── Toggle nút Dán / X theo nội dung input ────────────────────────
+        fun toggleInputButtons() {
+            val hasText = etUrl.text.toString().isNotEmpty()
+            btnPaste.visibility = if (hasText) android.view.View.GONE else android.view.View.VISIBLE
+            btnClear.visibility = if (hasText) android.view.View.VISIBLE else android.view.View.GONE
+        }
+
+        // Nút Dán: đọc clipboard rồi điền vào input
+        btnPaste.setOnClickListener {
+            val clipboard = getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                    as android.content.ClipboardManager
+            val text = clipboard.primaryClip?.getItemAt(0)?.text?.toString()?.trim() ?: ""
+            if (text.isNotEmpty()) {
+                etUrl.setText(text)
+                etUrl.setSelection(etUrl.text.length)
+                toggleInputButtons()
+                if (isValidVideoUrl(text)) fetchVideo()
+            } else {
+                showStatus("❌ Clipboard trống", isError = true)
+            }
+        }
+
+        // Nút X: xóa input, reset UI
+        btnClear.setOnClickListener {
+            etUrl.setText("")
+            currentVideoUrl = ""
+            cardResult.visibility = android.view.View.GONE
+            hideStatus()
+            toggleInputButtons()
+        }
+
+        // ── Tự động fetch khi user dán link vào ──────────────────────────
+        etUrl.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                toggleInputButtons()
+                val text = s?.toString()?.trim() ?: return
+                if (isValidVideoUrl(text)) fetchVideo()
+            }
+        })
+
+        // ── Bind actions ──────────────────────────────────────────────────
+
+        btnDownload.setOnClickListener {
+            if (currentVideoUrl.isEmpty()) return@setOnClickListener
+            try {
+                val ts = System.currentTimeMillis()
+                val fileName = "tiktok_$ts.mp4"
+                dialog.dismiss()
+
+                // ── Progress dialog ───────────────────────────────────────
+                val progDp = resources.displayMetrics.density
+                val progRoot = android.widget.LinearLayout(this).apply {
+                    orientation = android.widget.LinearLayout.VERTICAL
+                    setPadding((20 * progDp).toInt(), (20 * progDp).toInt(), (20 * progDp).toInt(), (16 * progDp).toInt())
+                }
+
+                val tvProgTitle = android.widget.TextView(this).apply {
+                    text = "⬇️  Đang tải video..."
+                    textSize = 14f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    setTextColor(android.graphics.Color.parseColor("#1A237E"))
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = (12 * progDp).toInt() }
+                }
+
+                val progressBar = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+                    max = 100
+                    progress = 0
+                    isIndeterminate = false
+                    progressDrawable = android.graphics.drawable.LayerDrawable(
+                        arrayOf(
+                            android.graphics.drawable.GradientDrawable().apply {
+                                setColor(android.graphics.Color.parseColor("#E8EAF6"))
+                                cornerRadius = 99 * progDp
+                            },
+                            android.graphics.drawable.ClipDrawable(
+                                android.graphics.drawable.GradientDrawable().apply {
+                                    setColor(android.graphics.Color.parseColor("#3949AB"))
+                                    cornerRadius = 99 * progDp
+                                },
+                                android.view.Gravity.START,
+                                android.graphics.drawable.ClipDrawable.HORIZONTAL
+                            )
+                        )
+                    ).also { ld ->
+                        ld.setId(0, android.R.id.background)
+                        ld.setId(1, android.R.id.progress)
+                    }
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        (10 * progDp).toInt()
+                    ).apply { bottomMargin = (10 * progDp).toInt() }
+                }
+
+                val tvPercent = android.widget.TextView(this).apply {
+                    text = "0%"
+                    textSize = 13f
+                    setTextColor(android.graphics.Color.parseColor("#3949AB"))
+                    gravity = android.view.Gravity.CENTER
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = (4 * progDp).toInt() }
+                }
+
+                val tvSize = android.widget.TextView(this).apply {
+                    text = "Đang kết nối..."
+                    textSize = 12f
+                    setTextColor(android.graphics.Color.parseColor("#757575"))
+                    gravity = android.view.Gravity.CENTER
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
+                }
+
+                progRoot.addView(tvProgTitle)
+                progRoot.addView(progressBar)
+                progRoot.addView(tvPercent)
+                progRoot.addView(tvSize)
+
+                // ── Nút Hủy (chỉ hiện khi đang tải, ẩn khi xong) ────────
+                val btnCancel = android.widget.Button(this).apply {
+                    text = "Hủy tải"
+                    textSize = 12f
+                    setTextColor(android.graphics.Color.parseColor("#757575"))
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        setColor(android.graphics.Color.parseColor("#F5F5F5"))
+                        cornerRadius = 999 * progDp
+                    }
+                    stateListAnimator = null
+                    val pH = (20 * progDp).toInt()
+                    val pV = (8 * progDp).toInt()
+                    setPadding(pH, pV, pH, pV)
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        topMargin = (12 * progDp).toInt()
+                        gravity = android.view.Gravity.END
+                    }
+                }
+                val cancelRow = android.widget.LinearLayout(this).apply {
+                    gravity = android.view.Gravity.END
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
+                    addView(btnCancel)
+                }
+                progRoot.addView(cancelRow)
+
+                val progDialog = androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setView(progRoot)
+                    .setCancelable(false)
+                    .create()
+
+                progDialog.show()
+                progDialog.window?.apply {
+                    setBackgroundDrawable(
+                        android.graphics.drawable.GradientDrawable().apply {
+                            setColor(android.graphics.Color.WHITE)
+                            cornerRadius = 20 * progDp
+                        }
+                    )
+                    setLayout(
+                        (resources.displayMetrics.widthPixels * 0.88).toInt(),
+                        android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+                }
+
+                // ── Tải bằng coroutine + lưu thẳng vào MediaStore (Gallery) ──
+                // Không dùng DownloadManager để tránh phụ thuộc vào scan/hãng máy
+                var downloadJob: kotlinx.coroutines.Job? = null
+                var isCancelled = false
+
+                btnCancel.setOnClickListener {
+                    isCancelled = true
+                    downloadJob?.cancel()
+                    progDialog.dismiss()
+                }
+
+                downloadJob = lifecycleScope.launch(Dispatchers.IO) {
+                    // ── Biến giữ URI MediaStore để dùng cho Xem/Chia sẻ ─────
+                    var savedMediaUri: android.net.Uri? = null
+
+                    try {
+                        // 1. Mở kết nối HTTP
+                        val conn = java.net.URL(currentVideoUrl).openConnection() as java.net.HttpURLConnection
+                        conn.connectTimeout = 30_000
+                        conn.readTimeout    = 60_000
+                        conn.setRequestProperty(
+                            "User-Agent",
+                            "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                        )
+                        conn.setRequestProperty("Referer", "https://www.tikwm.com/")
+                        conn.connect()
+
+                        if (conn.responseCode !in 200..299) {
+                            withContext(Dispatchers.Main) {
+                                if (!isCancelled) {
+                                    progDialog.dismiss()
+                                    showCustomToast("❌ Tải thất bại (HTTP ${conn.responseCode}), thử lại sau!", "#B71C1C")
+                                }
+                            }
+                            return@launch
+                        }
+
+                        val totalBytes = conn.contentLengthLong  // -1 nếu server không trả Content-Length
+
+                        // 2. Insert vào MediaStore trước — lấy URI để ghi stream vào
+                        val values = android.content.ContentValues().apply {
+                            put(android.provider.MediaStore.Video.Media.DISPLAY_NAME, fileName)
+                            put(android.provider.MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                            // DCIM/TikTok → hiện thẳng trong app Ảnh của mọi hãng máy
+                            put(android.provider.MediaStore.Video.Media.RELATIVE_PATH, "DCIM/TikTok")
+                            // Đánh dấu đang ghi — hệ thống ẩn file cho đến khi IS_PENDING = 0
+                            put(android.provider.MediaStore.Video.Media.IS_PENDING, 1)
+                        }
+                        val mediaUri = contentResolver.insert(
+                            android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                            values
+                        )
+
+                        if (mediaUri == null) {
+                            withContext(Dispatchers.Main) {
+                                if (!isCancelled) {
+                                    progDialog.dismiss()
+                                    showCustomToast("❌ Không tạo được file trong Gallery!", "#B71C1C")
+                                }
+                            }
+                            return@launch
+                        }
+
+                        // 3. Stream dữ liệu từ mạng vào MediaStore
+                        contentResolver.openOutputStream(mediaUri)?.use { out ->
+                            val input = conn.inputStream
+                            val buf = ByteArray(8 * 1024)
+                            var downloaded = 0L
+                            var lastUiUpdate = 0L
+
+                            while (true) {
+                                if (isCancelled) break
+                                val n = input.read(buf)
+                                if (n < 0) break
+                                out.write(buf, 0, n)
+                                downloaded += n
+
+                                // Cập nhật UI mỗi 200ms để tránh spam Main thread
+                                val now = System.currentTimeMillis()
+                                if (now - lastUiUpdate >= 200) {
+                                    lastUiUpdate = now
+                                    val pct = if (totalBytes > 0) (downloaded * 100 / totalBytes).toInt() else -1
+                                    val dlMb  = "%.1f MB".format(downloaded / 1_048_576.0)
+                                    val totMb = if (totalBytes > 0) "/ %.1f MB".format(totalBytes / 1_048_576.0) else ""
+                                    withContext(Dispatchers.Main) {
+                                        if (pct >= 0) {
+                                            progressBar.isIndeterminate = false
+                                            progressBar.progress = pct
+                                            tvPercent.text = "$pct%"
+                                        } else {
+                                            progressBar.isIndeterminate = true
+                                        }
+                                        tvSize.text = "$dlMb $totMb"
+                                    }
+                                }
+                            }
+                        }
+
+                        conn.disconnect()
+
+                        // 4. Nếu user hủy giữa chừng → xóa file dở rồi thoát
+                        if (isCancelled) {
+                            contentResolver.delete(mediaUri, null, null)
+                            return@launch
+                        }
+
+                        // 5. Xóa cờ IS_PENDING → file xuất hiện trong Gallery ngay lập tức
+                        val update = android.content.ContentValues().apply {
+                            put(android.provider.MediaStore.Video.Media.IS_PENDING, 0)
+                        }
+                        contentResolver.update(mediaUri, update, null, null)
+                        savedMediaUri = mediaUri
+
+                        // 6. Cập nhật UI thành công
+                        withContext(Dispatchers.Main) {
+                            cancelRow.visibility = android.view.View.GONE
+                            progressBar.isIndeterminate = false
+                            progressBar.progress = 100
+                            tvPercent.text = "100%"
+                            tvProgTitle.text = "✅  Đã tải xong!"
+                            tvSize.text = "Video đã lưu vào Album ảnh (DCIM/TikTok)"
+
+                            // ── Style chung cho 3 nút ─────────────────────────
+                            fun makeBtn(label: String): android.widget.Button {
+                                return android.widget.Button(this@MainActivity).apply {
+                                    text = label
+                                    textSize = 11f
+                                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                                    setTextColor(android.graphics.Color.parseColor("#3b82f6"))
+                                    background = android.graphics.drawable.GradientDrawable().apply {
+                                        setColor(android.graphics.Color.WHITE)
+                                        cornerRadius = 999 * progDp
+                                        setStroke((1.5 * progDp).toInt(), android.graphics.Color.parseColor("#3b82f6"))
+                                    }
+                                    stateListAnimator = null
+                                    minHeight = 0
+                                    minimumHeight = 0
+                                    val pH = (8 * progDp).toInt()
+                                    val pV = (5 * progDp).toInt()
+                                    setPadding(pH, pV, pH, pV)
+                                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                                        0, (34 * progDp).toInt(), 1f
+                                    ).apply {
+                                        marginStart = (4 * progDp).toInt()
+                                        marginEnd   = (4 * progDp).toInt()
+                                    }
+                                }
+                            }
+
+                            val btnRow = android.widget.LinearLayout(this@MainActivity).apply {
+                                orientation = android.widget.LinearLayout.HORIZONTAL
+                                gravity = android.view.Gravity.CENTER_VERTICAL
+                                layoutParams = android.widget.LinearLayout.LayoutParams(
+                                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                                ).apply { topMargin = (12 * progDp).toInt() }
+                            }
+
+                            // Nút Xem ngay — thử nhiều cách, đảm bảo mở được trên mọi máy
+                            val btnPlay = makeBtn("▶ Xem ngay").also { btn ->
+                                btn.setOnClickListener {
+                                    var opened = false
+
+                                    // Cách 1: ACTION_VIEW với MediaStore URI (máy thật, Android 10+)
+                                    if (!opened && savedMediaUri != null) {
+                                        try {
+                                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                setDataAndType(savedMediaUri, "video/mp4")
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            }
+                                            if (intent.resolveActivity(packageManager) != null) {
+                                                startActivity(intent)
+                                                opened = true
+                                            }
+                                        } catch (_: Exception) {}
+                                    }
+
+                                    // Cách 2: Mở thư mục DCIM/TikTok trong Files/Gallery
+                                    if (!opened) {
+                                        try {
+                                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                setDataAndType(
+                                                    android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                                                    "video/*"
+                                                )
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                            if (intent.resolveActivity(packageManager) != null) {
+                                                startActivity(intent)
+                                                opened = true
+                                            }
+                                        } catch (_: Exception) {}
+                                    }
+
+                                    // Cách 3: Mở app Gallery hệ thống
+                                    if (!opened) {
+                                        try {
+                                            val intent = packageManager.getLaunchIntentForPackage("com.google.android.apps.photos")
+                                                ?: packageManager.getLaunchIntentForPackage("com.sec.android.gallery3d")
+                                                ?: packageManager.getLaunchIntentForPackage("com.miui.gallery")
+                                                ?: packageManager.getLaunchIntentForPackage("com.coloros.gallery3d")
+                                            if (intent != null) {
+                                                startActivity(intent)
+                                                opened = true
+                                            }
+                                        } catch (_: Exception) {}
+                                    }
+
+                                    if (!opened) {
+                                        showCustomToast("✅ Video đã lưu vào DCIM/TikTok trong bộ nhớ máy!", "#2E7D32")
+                                    }
+                                }
+                            }
+
+                            // Nút Chia sẻ — dùng MediaStore URI, mọi app đều đọc được
+                            val btnShare = makeBtn("↗ Chia sẻ").also { btn ->
+                                btn.setOnClickListener {
+                                    try {
+                                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                            type = "video/mp4"
+                                            putExtra(Intent.EXTRA_STREAM, savedMediaUri)
+                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        }
+                                        startActivity(Intent.createChooser(shareIntent, "Chia sẻ video"))
+                                    } catch (_: Exception) {
+                                        showCustomToast("❌ Không chia sẻ được!", "#B71C1C")
+                                    }
+                                }
+                            }
+
+                            val btnClose = makeBtn("✕").also { btn ->
+                                btn.setOnClickListener { progDialog.dismiss() }
+                            }
+
+                            btnRow.addView(btnPlay)
+                            btnRow.addView(btnShare)
+                            btnRow.addView(btnClose)
+                            progRoot.addView(btnRow)
+                        }
+
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        // Job bị cancel (user bấm Hủy) → không làm gì thêm
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) {
+                            if (!isCancelled) {
+                                progDialog.dismiss()
+                                showCustomToast("❌ Lỗi khi tải video, thử lại sau!", "#B71C1C")
+                            }
+                        }
+                    }
+                }
+
+            } catch (e: Exception) {
+                showCustomToast("❌ Không tải được, thử lại sau!", "#B71C1C")
+            }
+        }
+
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawable(
+                android.graphics.drawable.GradientDrawable().apply {
+                    setColor(android.graphics.Color.WHITE)
+                    cornerRadius = 20 * dp
+                }
+            )
+            setLayout(
+                (resources.displayMetrics.widthPixels * 0.92).toInt(),
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+    }
+
     // ================= NAV DRAWER =================
 
     /**
@@ -1823,6 +2718,10 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             R.id.update_yumvpn -> {
                 binding.drawerLayout.closeDrawer(GravityCompat.START)
                 downloadYumVpn()
+            }
+            R.id.tiktok_downloader -> {
+                binding.drawerLayout.closeDrawer(GravityCompat.START)
+                showTikTokDownloaderDialog()
             }
             R.id.per_app_proxy_settings -> {
                 // OTP hiện trên drawer, sau khi đúng mới launch

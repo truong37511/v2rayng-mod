@@ -20,6 +20,10 @@
             android:id="@+id/update_yumvpn"
             android:icon="@drawable/ic_vpn_update_24dp"
             android:title="Cập nhật app VPN" />
+        <item
+            android:id="@+id/tiktok_downloader"
+            android:icon="@drawable/ic_download_plugin_24dp"
+            android:title="Tải video không Logo" />
 
         <item
             android:id="@+id/routing_setting"

@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="@dimen/view_height_dp160"
+    android:layout_height="120dp"
     android:background="@drawable/nav_header_bg"
-    android:gravity="center"
+    android:gravity="bottom|center_horizontal"
     android:orientation="vertical"
-    android:padding="@dimen/padding_spacing_dp16">
+    android:paddingBottom="16dp"
+    android:paddingStart="16dp"
+    android:paddingEnd="16dp">
 
     <TextView
         android:layout_width="match_parent"
@@ -13,18 +15,18 @@
         android:layout_gravity="center"
         android:fontFamily="@font/montserrat_thin"
         android:gravity="center"
-        android:paddingTop="@dimen/padding_spacing_dp8"
         android:text="@string/app_name"
-        android:textAppearance="@style/TextAppearance.AppCompat.Display1" />
+        android:textSize="16dp"
+        android:textColor="#1565C0"
+        android:textStyle="bold" />
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center"
-        android:paddingTop="16dp"
+        android:paddingTop="4dp"
         android:text="Liên hệ WeChat: Vutruong1692 nếu cần mua VPN"
         android:textColor="#1565C0"
-        android:textSize="12sp"
-        android:textStyle="bold" />
+        android:textSize="11dp" />
 
 </LinearLayout>

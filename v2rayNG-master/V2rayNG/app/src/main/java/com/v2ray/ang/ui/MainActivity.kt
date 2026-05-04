@@ -173,7 +173,6 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         } catch (e: Exception) {
             binding.tvToolbarVersion.text = ""
         }
-
         // ✅ Khôi phục pendingInstallUri nếu app bị force stop / xóa RAM giữa chừng
         val installPrefs = getSharedPreferences("install_prefs", MODE_PRIVATE)
         val savedUri = installPrefs.getString("pending_uri", null)
@@ -2845,10 +2844,10 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             val diffMinutes = diffMs / (1000L * 60)
             val diffSeconds = diffMs / 1000L
             return when {
-                diffDays >= 1 -> "còn $diffDays ngày"
-                diffHours >= 1 -> "còn $diffHours giờ"
-                diffMinutes >= 1 -> "còn $diffMinutes phút"
-                diffSeconds >= 0 -> "còn $diffSeconds giây"
+                diffDays >= 1 -> "còn lại $diffDays ngày"
+                diffHours >= 1 -> "còn lại $diffHours giờ"
+                diffMinutes >= 1 -> "còn lại $diffMinutes phút"
+                diffSeconds >= 0 -> "còn lại $diffSeconds giây"
                 else -> ""
             }
         }
@@ -2856,7 +2855,6 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         // ✅ Ưu tiên ngày hết hạn từ AppExpireManager (thiết bị đã cài)
         val deviceExpireTs = AppExpireManager.getExpireTimestamp(this)
         if (deviceExpireTs > 0L) {
-            val diffDays = (deviceExpireTs - now) / (1000L * 60 * 60 * 24)
             val dateStr = sdf.format(java.util.Date(deviceExpireTs))
             binding.tvToolbarExpire.visibility = android.view.View.VISIBLE
             when {
@@ -2864,16 +2862,14 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                     binding.tvToolbarExpire.text = "⏰ ĐÃ HẾT HẠN ($dateStr)"
                     binding.tvToolbarExpire.setTextColor(android.graphics.Color.parseColor("#B71C1C"))
                 }
-                diffDays <= 7 -> {
-                    // Còn ≤ 7 ngày → hiện thêm đếm ngược để cảnh báo user
-                    binding.tvToolbarExpire.text = "⏰ $dateStr (${formatTimeLeft(deviceExpireTs)})"
-                    binding.tvToolbarExpire.setTextColor(android.graphics.Color.parseColor("#E65100"))
-                }
                 else -> {
-                    // Còn > 7 ngày → hiện "Hết hạn: ngày", màu cam đậm
-                    binding.tvToolbarExpire.text = "Hết hạn: $dateStr"
+                    binding.tvToolbarExpire.text = "Ngày hết hạn: $dateStr · ${formatTimeLeft(deviceExpireTs)}"
                     binding.tvToolbarExpire.setTextColor(android.graphics.Color.parseColor("#E65100"))
                 }
+            }
+            binding.tvToolbarExpire.post {
+                binding.tvToolbarExpire.isSelected = false
+                binding.tvToolbarExpire.isSelected = true
             }
             return
         }
@@ -2888,7 +2884,6 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         }
 
         val expireTs = activeSub.subscription.expireDate!! * 1000L  // giây → ms
-        val diffDays = (expireTs - now) / (1000L * 60 * 60 * 24)
         val sdfDate = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.getDefault())
         val dateStr = sdfDate.format(java.util.Date(expireTs))
 
@@ -2898,16 +2893,14 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                 binding.tvToolbarExpire.text = "⏰ ĐÃ HẾT HẠN ($dateStr)"
                 binding.tvToolbarExpire.setTextColor(android.graphics.Color.parseColor("#B71C1C"))
             }
-            diffDays <= 7 -> {
-                // Còn ≤ 7 ngày → hiện thêm đếm ngược để cảnh báo user
-                binding.tvToolbarExpire.text = "⏰ $dateStr (${formatTimeLeft(expireTs)})"
-                binding.tvToolbarExpire.setTextColor(android.graphics.Color.parseColor("#E65100"))
-            }
             else -> {
-                // Còn > 7 ngày → hiện "Hết hạn: ngày", màu cam đậm
-                binding.tvToolbarExpire.text = "Hết hạn: $dateStr"
+                binding.tvToolbarExpire.text = "Ngày hết hạn: $dateStr · ${formatTimeLeft(expireTs)}"
                 binding.tvToolbarExpire.setTextColor(android.graphics.Color.parseColor("#E65100"))
             }
+        }
+        binding.tvToolbarExpire.post {
+            binding.tvToolbarExpire.isSelected = false
+            binding.tvToolbarExpire.isSelected = true
         }
     }
 

@@ -41,7 +41,7 @@ object OtpDialog {
 
         // ── Tiêu đề ──────────────────────────────────────────────────────
         card.addView(TextView(context).apply {
-            text = "Xác minh Admin"
+            text = "Xác minh OTP"
             textSize = 18f
             setTextColor(BLUE_DARK)
             typeface = Typeface.DEFAULT_BOLD
@@ -55,7 +55,7 @@ object OtpDialog {
         val etOtp = EditText(context).apply {
             hint = "• • • • • •"
             inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            textSize = 30f
+            textSize = 20f
             setTextColor(BLUE_DARK)
             setHintTextColor(HINT_COLOR)
             typeface = Typeface.MONOSPACE
@@ -87,10 +87,11 @@ object OtpDialog {
 
         // ── Hướng dẫn ────────────────────────────────────────────────────
         val guides = listOf(
+            "⏰" to "mã OTP có thời hạn 30 giây, khi nhận được mã phải nhập nhanh vào.",
             "\uD83D\uDCF1" to "Hỗ trợ SIM Trung Quốc, không cần tháo SIM khi dùng TikTok.",
-            "\u26A0\uFE0F" to "TikTok cập nhật thuật toán thường xuyên. Chỉ tải bản mới nhất tại đây mới đảm bảo hoạt động ổn định.",
-            "\uD83D\uDDD1\uFE0F" to "Cần gỡ sạch TikTok cũ trước khi cài — còn sót lại sẽ không cài được.",
-            "\uD83D\uDEAB" to "Sau khi cài, không cập nhật qua Play Store hay bất kỳ chợ ứng dụng nào khác."
+            "\u26A0\uFE0F" to "TikTok cập nhật thuật toán thường xuyên. Các bản mod cũng phải cập nhật lại",
+            "\uD83D\uDDD1\uFE0F" to "Cần xóa bỏ ứng dụng TikTok cũ trước khi bấm cài — chưa xóa sẽ không cài được.",
+            "\uD83D\uDEAB" to "Sau khi cài xong, không được cập nhật lại nó qua CH Play hay bất kỳ chợ ứng dụng nào khác."
         )
 
         guides.forEachIndexed { index, (icon, text) ->
@@ -109,10 +110,28 @@ object OtpDialog {
             ))
 
             row.addView(TextView(context).apply {
-                this.text = text
+                // Tô màu đỏ "30 giây" nếu có trong text
+                val spannable = android.text.SpannableString(text)
+                val keyword = "30 giây"
+                val start = text.indexOf(keyword)
+                if (start >= 0) {
+                    spannable.setSpan(
+                        android.text.style.ForegroundColorSpan(Color.RED),
+                        start,
+                        start + keyword.length,
+                        android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                    spannable.setSpan(
+                        android.text.style.StyleSpan(Typeface.BOLD),
+                        start,
+                        start + keyword.length,
+                        android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                }
+                this.text = spannable
                 textSize = 12.5f
                 setTextColor(BLUE_TEXT)
-                setLineSpacing(4f, 1f)   // extra=4px thay multiplier, tránh clip descender
+                setLineSpacing(4f, 1f)
                 includeFontPadding = true
                 setPadding(0, 0, 0, 2.dp())
             }, LinearLayout.LayoutParams(
@@ -155,7 +174,6 @@ object OtpDialog {
         val wrapper = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(20.dp(), 0, 20.dp(), 0)
-            // QUAN TRỌNG: WRAP_CONTENT để không bị giới hạn chiều cao
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -171,12 +189,10 @@ object OtpDialog {
         dialog.setContentView(wrapper)
         dialog.setCanceledOnTouchOutside(true)
 
-        // show() TRƯỚC — sau đó mới set layout để không bị reset
         dialog.show()
 
         dialog.window?.apply {
             setBackgroundDrawableResource(android.R.color.transparent)
-            // MATCH_PARENT width, WRAP_CONTENT height — set SAU show()
             setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             setDimAmount(0.5f)
             addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
@@ -184,7 +200,6 @@ object OtpDialog {
             val params = attributes
             params.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             params.y = (context.resources.displayMetrics.heightPixels * 0.18f).toInt()
-            // Xóa flag giới hạn chiều cao của hệ thống
             params.flags = params.flags and WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS.inv()
             attributes = params
         }

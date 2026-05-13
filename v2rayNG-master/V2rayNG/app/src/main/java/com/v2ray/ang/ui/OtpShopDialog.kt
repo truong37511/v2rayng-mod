@@ -3,13 +3,16 @@ package com.v2ray.ang.ui
 import android.app.Dialog
 import android.content.Context
 import android.graphics.Color
-import android.graphics.drawable.ColorDrawable
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.text.Editable
 import android.text.TextWatcher
-import android.view.Window
+import android.view.Gravity
+import android.view.ViewGroup
+import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
-import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -27,29 +30,43 @@ class OtpShopDialog(
 
     private lateinit var dialog: Dialog
     private lateinit var etOtp: EditText
-    private lateinit var btnCancel: Button
+    private lateinit var btnCancel: TextView
     private lateinit var tvStatus: TextView
     private lateinit var progressBar: ProgressBar
+
+    private val BLUE_DARK   = Color.parseColor("#0D47A1")
+    private val BLUE_TEXT   = Color.parseColor("#1976D2")
+    private val BLUE_BORDER = Color.parseColor("#90CAF9")
+    private val HINT_COLOR  = Color.parseColor("#90CAF9")
 
     private enum class State { INPUT, LOADING, SUCCESS, ERROR }
 
     fun show() {
-        dialog = Dialog(activity)
-        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        dialog = Dialog(activity, android.R.style.Theme_Translucent_NoTitleBar)
 
         val view = buildDialogView()
         dialog.setContentView(view)
-        dialog.setCancelable(true)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.show()
+
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setDimAmount(0.5f)
+            addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            val params = attributes
+            params.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            params.y = (activity.resources.displayMetrics.heightPixels * 0.18f).toInt()
+            params.flags = params.flags and WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS.inv()
+            attributes = params
+        }
+
+        dialog.setOnDismissListener {
+            activity.window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        }
 
         setupListeners()
         setState(State.INPUT)
-
-        dialog.show()
-
-        dialog.setOnDismissListener {
-            activity.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-        }
 
         etOtp.postDelayed({
             etOtp.requestFocus()
@@ -59,183 +76,164 @@ class OtpShopDialog(
     }
 
     private fun buildDialogView(): android.view.View {
-        val card = androidx.cardview.widget.CardView(activity).apply {
-            radius = dp(20).toFloat()
-            cardElevation = dp(12).toFloat()
-            setCardBackgroundColor(Color.parseColor("#FFFFFF"))
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+        val dp = activity.resources.displayMetrics.density
+        fun Int.dp() = (this * dp).toInt()
+
+        val wrapper = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(20.dp(), 0, 20.dp(), 0)
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
 
-        val inner = android.widget.LinearLayout(activity).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            setPadding(dp(28), dp(28), dp(28), dp(24))
+        val card = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24.dp(), 28.dp(), 24.dp(), 20.dp())
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = 28.dp().toFloat()
+            }
         }
 
-        val accentBar = android.view.View(activity).apply {
-            background = android.graphics.drawable.GradientDrawable(
-                android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(Color.parseColor("#2E7D32"), Color.parseColor("#66BB6A"))
-            ).also { it.cornerRadii = floatArrayOf(dp(4).toFloat(), dp(4).toFloat(), dp(4).toFloat(), dp(4).toFloat(), 0f, 0f, 0f, 0f) }
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT, dp(4)
-            ).apply { bottomMargin = dp(20) }
-        }
-        inner.addView(accentBar)
-
-        val tvTitle = TextView(activity).apply {
+        // ── Tiêu đề ──────────────────────────────────────────────────────
+        card.addView(TextView(activity).apply {
             text = "Kích hoạt đại lý"
             textSize = 18f
-            setTextColor(Color.parseColor("red"))
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(6) }
-        }
-        inner.addView(tvTitle)
+            setTextColor(BLUE_DARK)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = 4.dp() })
 
-        val tvSub = TextView(activity).apply {
+        // ── Subtitle ─────────────────────────────────────────────────────
+        card.addView(TextView(activity).apply {
             text = "Nhập mã xác minh từ Google Authenticator ."
-            textSize = 15f
+            textSize = 13f
             setTextColor(Color.parseColor("#607D8B"))
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(4) }
-        }
-        inner.addView(tvSub)
+            gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = 4.dp() })
 
-        val tvHint = TextView(activity).apply {
+        // ── Hint ─────────────────────────────────────────────────────────
+        card.addView(TextView(activity).apply {
             text = "Chức năng này chỉ dành cho Admin"
             textSize = 13f
-            setTextColor(Color.parseColor("blue"))
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(20) }
-        }
-        inner.addView(tvHint)
+            setTextColor(BLUE_TEXT)
+            gravity = Gravity.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = 20.dp() })
 
+        // ── OTP input ────────────────────────────────────────────────────
         etOtp = EditText(activity).apply {
-            hint = "******"
+            hint = "• • • • • •"
             inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            textSize = 32f
-            setTextColor(Color.parseColor("#1B5E20"))
-            setHintTextColor(Color.parseColor("#B0BEC5"))
-            typeface = android.graphics.Typeface.MONOSPACE
-            gravity = android.view.Gravity.CENTER
+            textSize = 20f
+            setTextColor(BLUE_DARK)
+            setHintTextColor(HINT_COLOR)
+            typeface = Typeface.MONOSPACE
+            gravity = Gravity.CENTER
             maxLines = 1
             filters = arrayOf(android.text.InputFilter.LengthFilter(6))
-            background = null
-            letterSpacing = 0.3f
+            letterSpacing = 0.4f
+            setPadding(12.dp(), 14.dp(), 12.dp(), 14.dp())
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 14.dp().toFloat()
+                setStroke(2.dp(), BLUE_BORDER)
+                setColor(Color.WHITE)
+            }
         }
+        etOtp.setOnClickListener { etOtp.setText("") }
 
-        val etWrap = android.widget.FrameLayout(activity).apply {
-            background = buildRoundedBorder()
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(4) }
-            addView(
-                etOtp,
-                android.widget.FrameLayout.LayoutParams(
-                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-                    android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
-                ).apply { setMargins(dp(16), dp(12), dp(16), dp(12)) }
-            )
-        }
-        inner.addView(etWrap)
+        card.addView(etOtp, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = 16.dp() })
 
-        etOtp.setOnClickListener {
-            if (etOtp.text.isNotEmpty()) etOtp.setText("")
-        }
-
+        // ── Progress bar ─────────────────────────────────────────────────
         progressBar = ProgressBar(activity).apply {
             visibility = android.view.View.GONE
             isIndeterminate = true
-            indeterminateTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#388E3C"))
+            indeterminateTintList =
+                android.content.res.ColorStateList.valueOf(BLUE_TEXT)
         }
-        val pbWrap = android.widget.LinearLayout(activity).apply {
-            gravity = android.view.Gravity.CENTER
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(14) }
-            addView(progressBar)
-        }
-        inner.addView(pbWrap)
+        card.addView(progressBar, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            bottomMargin = 4.dp()
+        })
 
+        // ── Status text ──────────────────────────────────────────────────
         tvStatus = TextView(activity).apply {
             text = ""
             textSize = 13f
             setTextColor(Color.parseColor("#E53935"))
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(10) }
-            gravity = android.view.Gravity.CENTER
+            gravity = Gravity.CENTER
             maxLines = 5
             isSingleLine = false
             ellipsize = null
         }
-        inner.addView(tvStatus)
+        card.addView(tvStatus, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = 8.dp() })
 
-        val btnRow = android.widget.LinearLayout(activity).apply {
-            orientation = android.widget.LinearLayout.HORIZONTAL
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(20) }
-            gravity = android.view.Gravity.END
+        // ── Divider ───────────────────────────────────────────────────────
+        card.addView(android.view.View(activity).apply {
+            setBackgroundColor(Color.parseColor("#E3F2FD"))
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 1.dp()
+        ).apply {
+            topMargin = 8.dp()
+            bottomMargin = 12.dp()
+        })
+
+        // ── Nút HỦY ──────────────────────────────────────────────────────
+        btnCancel = TextView(activity).apply {
+            text = "HỦY"
+            textSize = 14f
+            setTextColor(BLUE_DARK)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER_VERTICAL or Gravity.END
+            setPadding(0, 4.dp(), 4.dp(), 0)
         }
+        card.addView(btnCancel, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
 
-        btnCancel = Button(activity).apply {
-            text = "Đóng"
-            setTextColor(Color.parseColor("#2E7D32"))
-            background = android.graphics.drawable.GradientDrawable().apply {
-                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-                cornerRadius = dp(8).toFloat()
-                setColor(Color.parseColor("#E8F5E9"))
-            }
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                dp(40)
-            )
-            setPadding(dp(20), 0, dp(20), 0)
-        }
+        wrapper.addView(card, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
 
-        btnRow.addView(btnCancel)
-        inner.addView(btnRow)
-
-        card.addView(inner)
-        return card
-    }
-
-    private fun buildRoundedBorder(): android.graphics.drawable.GradientDrawable {
-        return android.graphics.drawable.GradientDrawable().apply {
-            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-            cornerRadius = dp(12).toFloat()
-            setStroke(dp(2), Color.parseColor("#A5D6A7"))
-            setColor(Color.parseColor("#F1FBF1"))
-        }
+        return wrapper
     }
 
     private fun setupListeners() {
+        val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         etOtp.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
                 val code = s.toString().trim()
                 if (code.length == 6) {
-                    hideKeyboard()
+                    imm.hideSoftInputFromWindow(etOtp.windowToken, 0)
                     handleVerifyAndFetch(code)
                 }
             }
         })
-
         btnCancel.setOnClickListener { dialog.dismiss() }
     }
 
@@ -252,7 +250,7 @@ class OtpShopDialog(
                 is SubConfigFetcher.FetchResult.Success -> {
                     val imported = tryImportSubContent(result.subContent)
                     if (imported) {
-                        val successColor = if (result.expireSource == "manual") "#1565C0" else "#E65100"
+                        val successColor = if (result.expireSource == "manual") "#1565C0" else "#1976D2"
                         setState(State.SUCCESS, "✅ Tải gói thành công — Gói đã được áp dụng.", successColor)
                         onImportSuccess?.invoke()
                         etOtp.postDelayed({ dialog.dismiss() }, 2000)
@@ -270,9 +268,6 @@ class OtpShopDialog(
         }
     }
 
-    /**
-     * Import raw config (vmess://, vless://, base64, ...) từ QR decode vào V2RayNG.
-     */
     private suspend fun tryImportSubContent(subContent: String): Boolean {
         return try {
             val trimmed = subContent.trim()
@@ -288,7 +283,9 @@ class OtpShopDialog(
         }
     }
 
-    private fun setState(state: State, message: String = "", successColor: String = "#1565C0") {
+    private fun setState(state: State, message: String = "", successColor: String = "#1976D2") {
+        val dp = activity.resources.displayMetrics.density
+        fun Int.dp() = (this * dp).toInt()
         when (state) {
             State.INPUT -> {
                 progressBar.visibility = android.view.View.GONE
@@ -307,7 +304,7 @@ class OtpShopDialog(
                 progressBar.visibility = android.view.View.GONE
                 tvStatus.text = message
                 tvStatus.setTextColor(Color.parseColor(successColor))
-                btnCancel.text = "Đóng"
+                btnCancel.text = "ĐÓNG"
                 btnCancel.isEnabled = true
             }
             State.ERROR -> {
@@ -324,14 +321,5 @@ class OtpShopDialog(
                 }, 600)
             }
         }
-    }
-
-    private fun hideKeyboard() {
-        val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-        imm.hideSoftInputFromWindow(etOtp.windowToken, 0)
-    }
-
-    private fun dp(value: Int): Int {
-        return (value * activity.resources.displayMetrics.density).toInt()
     }
 }

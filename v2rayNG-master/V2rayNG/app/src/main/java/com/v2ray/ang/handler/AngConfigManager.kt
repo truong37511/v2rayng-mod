@@ -537,25 +537,27 @@ object AngConfigManager {
             Log.i(AppConfig.TAG, url)
             val userAgent = it.subscription.userAgent
 
-            // Thử fetch có proxy trước, fallback không proxy nếu thất bại
+            // ✅ FIX: Thử direct trước — app mới cài / VPN chưa bật không có proxy local.
+            // Trước đây thử proxy (127.0.0.1:10808) trước → luôn fail khi VPN tắt → mất thời gian.
+            // Nếu direct thất bại (ví dụ sub server chặn IP trực tiếp) → fallback qua proxy VPN.
             var configText = ""
             var responseHeaders: Map<String, String> = emptyMap()
 
             try {
-                val httpPort = SettingsManager.getHttpPort()
-                val (body, headers) = HttpUtil.getUrlContentWithHeaders(url, userAgent, 15000, httpPort)
+                val (body, headers) = HttpUtil.getUrlContentWithHeaders(url, userAgent)
                 configText = body
                 responseHeaders = headers
             } catch (e: Exception) {
-                Log.e(AppConfig.ANG_PACKAGE, "Update subscription: proxy not ready or other error", e)
+                Log.e(AppConfig.TAG, "Update subscription: direct fetch failed, trying proxy...", e)
             }
             if (configText.isEmpty()) {
                 try {
-                    val (body, headers) = HttpUtil.getUrlContentWithHeaders(url, userAgent)
+                    val httpPort = SettingsManager.getHttpPort()
+                    val (body, headers) = HttpUtil.getUrlContentWithHeaders(url, userAgent, 15000, httpPort)
                     configText = body
                     responseHeaders = headers
                 } catch (e: Exception) {
-                    Log.e(AppConfig.TAG, "Update subscription: Failed to get URL content with user agent", e)
+                    Log.e(AppConfig.ANG_PACKAGE, "Update subscription: proxy not ready or other error", e)
                 }
             }
             if (configText.isEmpty()) {

@@ -1,9 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
-    android:viewportWidth="1024"
-    android:viewportHeight="1024">
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- Vòng tròn đầy (power ring - lit up khi đang bật) -->
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.2"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M6.34,6.34 A8,8 0 1,0 17.66,6.34" />
+
+    <!-- Gạch đứng giữa -->
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M12,3 L12,12" />
+
+    <!-- Chấm sáng nhỏ ở giữa (indicator đang bật) -->
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M256 192h512c35.392 0 64 28.608 64 64v512c0 35.392-28.608 64-64 64H256c-35.392 0-64-28.608-64-64V256c0-35.392 28.608-64 64-64z" />
+        android:pathData="M12,10.5 A1.5,1.5 0 1,0 12,13.5 A1.5,1.5 0 1,0 12,10.5z" />
+
 </vector>

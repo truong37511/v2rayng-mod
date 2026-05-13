@@ -9,6 +9,8 @@ import android.os.Bundle
 import android.os.Environment
 import android.view.Menu
 import android.view.MenuItem
+import android.view.animation.OvershootInterpolator
+import android.view.animation.DecelerateInterpolator
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.ActionBarDrawerToggle
@@ -30,6 +32,8 @@ import com.v2ray.ang.util.Utils
 import com.v2ray.ang.viewmodel.MainViewModel
 import com.v2ray.ang.handler.AppExpireManager
 import kotlinx.coroutines.*
+import java.net.InetSocketAddress
+import java.net.Proxy
 
 class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelectedListener {
 
@@ -38,6 +42,8 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
     private lateinit var groupPagerAdapter: GroupPagerAdapter
     private var tabMediator: TabLayoutMediator? = null
+    private var isFabAnimating = false
+    private var fabSpinJob: kotlinx.coroutines.Job? = null
 
     private val requestVpnPermission =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -118,28 +124,6 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             }
     }
 
-    // ✅ Helper tập trung: kiểm tra quyền rồi mở installer hoặc xin quyền
-    //    Dùng ở MỌI nơi cần mở installer — không viết lặp lại nữa
-    private fun tryOpenInstaller(dm: DownloadManager, downloadId: Long, title: String) {
-        try {
-            val apkUri = dm.getUriForDownloadedFile(downloadId)
-            if (apkUri == null) {
-                showCustomToast("✅ $title đã tải xong!\nKéo thông báo xuống → bấm vào để cài.", "#2E7D32")
-                return
-            }
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O
-                && !packageManager.canRequestPackageInstalls()
-            ) {
-                // Chưa có quyền → lưu URI rồi hiện dialog giải thích + mở Settings
-                pendingInstallUri = apkUri
-                showRetryPermissionDialog(apkUri)
-            } else {
-                launchInstaller(apkUri)
-            }
-        } catch (e: Exception) {
-            showCustomToast("✅ $title đã tải xong!\nKéo thông báo xuống → bấm vào để cài.", "#2E7D32")
-        }
-    }
 
     fun restartV2Ray() {
         if (mainViewModel.isRunning.value == true) {
@@ -191,6 +175,13 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         )
         binding.drawerLayout.addDrawerListener(toggle)
         toggle.syncState()
+
+        // ── Tô màu xanh dương cho icon hamburger (☰), title và version ──
+        val blueColor = ContextCompat.getColor(this, android.R.color.holo_blue_dark)
+            .let { android.graphics.Color.parseColor("#1565C0") }
+        toggle.drawerArrowDrawable.color = blueColor
+        binding.toolbar.setTitleTextColor(blueColor)
+        binding.tvToolbarVersion.setTextColor(blueColor)
 
         // Bấm Back khi drawer đang mở → đóng drawer, không thoát app
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
@@ -252,9 +243,8 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         // ── Thanh kiểm tra kết nối ────────────────────────────────────────
         updateConnectionTestBar(false)
         binding.layoutTest.setOnClickListener {
-            if (mainViewModel.isRunning.value == true) {
-                binding.tvTestState.text = getString(R.string.connection_test_testing)
-            }
+            if (mainViewModel.isRunning.value != true) return@setOnClickListener
+            binding.tvTestState.text = getString(R.string.connection_test_testing)
             mainViewModel.testCurrentServerRealPing()
         }
 
@@ -309,6 +299,9 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         // ✅ Hủy job fetch thông báo
         announcementJob?.cancel()
         announcementJob = null
+        // ✅ Dừng vòng xoay FAB nếu đang chạy
+        fabSpinJob?.cancel()
+        fabSpinJob = null
     }
 
     override fun onPause() {
@@ -322,92 +315,24 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
      * vẫn tải ngầm. Hàm này kiểm tra lại khi onResume — nếu file nào đã xong thì
      * tự động mở installer, nếu lỗi thì thông báo.
      */
+    /**
+     * Kiểm tra các download đang chờ khi user quay lại app.
+     * Sau khi chuyển sang coroutine download (không dùng DownloadManager),
+     * hàm này chỉ cần xóa sạch pendingDownloadIds cũ nếu còn sót.
+     */
     private fun checkPendingDownloads() {
-        if (pendingDownloadIds.isEmpty()) return
-        val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-
-        // Copy ra để tránh ConcurrentModificationException
-        val snapshot = pendingDownloadIds.toMap()
-
-        lifecycleScope.launch(Dispatchers.IO) {
-            for ((downloadId, title) in snapshot) {
-                val query = DownloadManager.Query().setFilterById(downloadId)
-                val cursor = dm.query(query) ?: continue
-                cursor.use { c ->
-                    if (!c.moveToFirst()) {
-                        // Download bị xóa khỏi hệ thống
-                        withContext(Dispatchers.Main) { pendingDownloadIds.remove(downloadId) }
-                        return@use
-                    }
-                    val statusCol = c.getColumnIndex(DownloadManager.COLUMN_STATUS)
-                    if (statusCol < 0) return@use
-                    val status = c.getInt(statusCol)
-
-                    withContext(Dispatchers.Main) {
-                        when (status) {
-                            DownloadManager.STATUS_SUCCESSFUL -> {
-                                pendingDownloadIds.remove(downloadId)
-                                resetDownloadState()
-                                // ✅ SỬA: dùng tryOpenInstaller thay vì viết lại logic quyền
-                                tryOpenInstaller(dm, downloadId, title)
-                            }
-                            DownloadManager.STATUS_FAILED -> {
-                                pendingDownloadIds.remove(downloadId)
-                                showCustomToast("✅ Hiện tại chưa cần cập nhật", "#2E7D32")
-                                resetDownloadState()
-                            }
-                            // Vẫn đang tải → khởi động lại watchJob để tiếp tục theo dõi
-                            DownloadManager.STATUS_RUNNING,
-                            DownloadManager.STATUS_PENDING,
-                            DownloadManager.STATUS_PAUSED -> {
-                                if (downloadWatchJob == null || downloadWatchJob?.isActive == false) {
-                                    isDownloading = true
-                                    resumeWatchJob(dm, downloadId, title)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // Download mới dùng coroutine + openConnectionViaProxy, tự quản lý vòng đời.
+        // pendingDownloadIds chỉ còn là legacy từ lần chạy cũ → xóa sạch để tránh nhầm lẫn.
+        pendingDownloadIds.clear()
     }
 
     /**
-     * Khởi động lại watchJob cho download đang chạy ngầm khi user quay lại app.
-     * Không có dialog tiến trình — chỉ toast khi xong.
+     * Legacy — không còn dùng sau khi chuyển sang coroutine download.
+     * Giữ lại để tránh compile error nếu còn nơi nào gọi.
      */
+    @Suppress("unused")
     private fun resumeWatchJob(dm: DownloadManager, downloadId: Long, title: String) {
-        downloadWatchJob = lifecycleScope.launch(Dispatchers.IO) {
-            while (isActive) {
-                delay(1_000)
-                val query = DownloadManager.Query().setFilterById(downloadId)
-                val cursor = dm.query(query) ?: break
-                cursor.use { c ->
-                    if (!c.moveToFirst()) { cancel(); return@use }
-                    val statusCol = c.getColumnIndex(DownloadManager.COLUMN_STATUS)
-                    if (statusCol < 0) return@use
-                    when (c.getInt(statusCol)) {
-                        DownloadManager.STATUS_SUCCESSFUL -> {
-                            withContext(Dispatchers.Main) {
-                                pendingDownloadIds.remove(downloadId)
-                                resetDownloadState()
-                                // ✅ SỬA: dùng tryOpenInstaller thay vì viết lại logic quyền
-                                tryOpenInstaller(dm, downloadId, title)
-                            }
-                            cancel()
-                        }
-                        DownloadManager.STATUS_FAILED -> {
-                            withContext(Dispatchers.Main) {
-                                pendingDownloadIds.remove(downloadId)
-                                resetDownloadState()
-                                showCustomToast("✅ Hiện tại chưa cần cập nhật", "#2E7D32")
-                            }
-                            cancel()
-                        }
-                    }
-                }
-            }
-        }
+        // No-op: coroutine download tự quản lý, không cần resume từ DownloadManager
     }
 
     private fun setupViewModel() {
@@ -428,7 +353,10 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                     mainViewModel.autoUpdateSubSilent {
                         setupGroupTab()
                         refreshExpireBanner()
-                        showCustomToast("✅ Cập nhật máy chủ thành công!", "#2E7D32")
+                        // ✅ Chỉ hiện toast khi không có dialog kết nối đang mở
+                        if (!VpnConnectingDialog.isShowing()) {
+                            showCustomToast("✅ Cập nhật máy chủ thành công!", "#2E7D32")
+                        }
                         // ✅ Fetch thông báo mới từ web admin sau khi update sub xong
                         fetchAnnouncement()
                     }
@@ -453,14 +381,21 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             }
         }
 
+        // Dismiss dialog khi VPN fail (isRunning không đổi nên applyRunningState không chạy)
+        mainViewModel.vpnStartFailed.observe(this) {
+            VpnConnectingDialog.dismiss()
+            stopFabSpinLoop()
+            binding.fab.isEnabled = true
+        }
+
         mainViewModel.startListenBroadcast()
         mainViewModel.initAssets(assets)
     }
 
     /**
      * Cập nhật text thanh trạng thái kết nối phía dưới màn hình.
-     * - VPN bật: "Đã kết nối, nhấn để kiểm tra kết nối mạng!"
-     * - VPN tắt: "VPN đang tắt, nhấn nút màu đỏ để bật."
+     * - VPN bật: text bình thường, bấm được, alpha 1.0
+     * - VPN tắt: text mờ, không bấm được (block ở onClick), alpha 0.45
      */
     private fun updateConnectionTestBar(isRunning: Boolean) {
         binding.tvTestState.text = if (isRunning) {
@@ -468,6 +403,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         } else {
             getString(R.string.connection_not_connected)
         }
+        binding.layoutTest.alpha = if (isRunning) 1f else 0.45f
     }
 
     internal fun setupGroupTab() {
@@ -485,45 +421,48 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
     }
 
     private fun handleFabAction() {
+        if (isFabAnimating) return
+
+        // ── Hiệu ứng bấm: scale down → scale up với Overshoot ──────────
+        binding.fab.animate()
+            .scaleX(0.82f).scaleY(0.82f)
+            .setDuration(100)
+            .setInterpolator(DecelerateInterpolator())
+            .withEndAction {
+                binding.fab.animate()
+                    .scaleX(1f).scaleY(1f)
+                    .setDuration(200)
+                    .setInterpolator(OvershootInterpolator(2.5f))
+                    .start()
+            }.start()
+
+        // ── Haptic feedback nhẹ ─────────────────────────────────────────
+        binding.fab.performHapticFeedback(
+            android.view.HapticFeedbackConstants.VIRTUAL_KEY,
+            android.view.HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
+        )
+
         if (mainViewModel.isRunning.value == true) {
             // Luôn cho phép TẮT VPN dù hết hạn
+            binding.fab.isEnabled = false
             V2RayServiceManager.stopVService(this)
         } else {
-            // Ưu tiên check AppExpireManager (admin cài tay)
+            // Check AppExpireManager (admin cài tay)
             if (AppExpireManager.isExpired(this)) {
                 showAppExpiredDialog()
                 return
             }
-            // Fallback: check ngày hết hạn từ sub link nếu admin chưa cài tay
-            if (AppExpireManager.getExpireTimestamp(this) == 0L) {
-                val subExpireTs = getSubLinkExpireTimestamp()
-                if (subExpireTs > 0L && System.currentTimeMillis() > subExpireTs) {
-                    showAppExpiredDialog(overrideExpireTs = subExpireTs)
-                    return
-                }
-            }
             val intent = VpnService.prepare(this)
-            if (intent == null) startV2Ray()
-            else requestVpnPermission.launch(intent)
+            if (intent == null) {
+                startV2Ray()
+            } else {
+                requestVpnPermission.launch(intent)
+            }
         }
-    }
-
-    /**
-     * Lấy timestamp hết hạn từ sub link đang active.
-     * Trả về 0L nếu không có sub nào có expireDate.
-     */
-    private fun getSubLinkExpireTimestamp(): Long {
-        val subs = MmkvManager.decodeSubscriptions()
-        val activeSub = subs.firstOrNull {
-            it.subscription.enabled && it.subscription.expireDate != null
-        }
-        return (activeSub?.subscription?.expireDate ?: 0L) * 1000L  // giây → ms
     }
 
     /**
      * Dialog thông báo app hết hạn — hiện khi user bấm FAB mà app đã hết hạn.
-     * @param overrideExpireTs Nếu truyền vào > 0, dùng timestamp này thay vì AppExpireManager
-     *                         (dùng khi hết hạn từ sub link, không phải cài tay)
      */
     private fun showAppExpiredDialog(overrideExpireTs: Long = 0L) {
         val dp = resources.displayMetrics.density
@@ -558,7 +497,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         // Icon lớn
         root.addView(android.widget.TextView(this).apply {
             text = "🔒"
-            textSize = 48f
+            textSize = 38f
             gravity = android.view.Gravity.CENTER
             layoutParams = android.widget.LinearLayout.LayoutParams(
                 android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
@@ -569,7 +508,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         // Tiêu đề
         root.addView(android.widget.TextView(this).apply {
             text = "VPN Đã Hết Hạn"
-            textSize = 20f
+            textSize = 18f
             typeface = android.graphics.Typeface.DEFAULT_BOLD
             gravity = android.view.Gravity.CENTER
             setTextColor(android.graphics.Color.parseColor("#B71C1C"))
@@ -580,7 +519,6 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         })
 
         // Ngày hết hạn cụ thể
-        // Ngày hết hạn cụ thể — ưu tiên overrideExpireTs (từ sub link), fallback AppExpireManager
         val expireTs = if (overrideExpireTs > 0L) overrideExpireTs else AppExpireManager.getExpireTimestamp(this)
         val dateStr = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm:ss", java.util.Locale.getDefault())
             .format(java.util.Date(expireTs))
@@ -610,7 +548,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             val padBox = (14 * dp).toInt()
             setPadding(padBox, padBox, padBox, padBox)
             background = android.graphics.drawable.GradientDrawable().apply {
-                setColor(android.graphics.Color.parseColor("#FFF3E0"))
+                setColor(android.graphics.Color.parseColor("#FFFFFF"))
                 cornerRadius = 10 * dp
                 setStroke((1.5 * dp).toInt(), android.graphics.Color.parseColor("#FF8F00"))
             }
@@ -621,9 +559,9 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
             addView(android.widget.TextView(this@MainActivity).apply {
                 text = "🎁 Khách hàng gia hạn đủ 4 lần sẽ được sử dụng Vĩnh Viễn.\n\n" +
-                        "Liên hệ ngay với tôi để gia hạn."
+                        "Liên hệ Wechat ID: Vutruong1692 để gia hạn."
                 textSize = 14f
-                setTextColor(android.graphics.Color.parseColor("#E91E63"))
+                setTextColor(android.graphics.Color.parseColor("#1976D2"))
                 gravity = android.view.Gravity.CENTER
                 setLineSpacing(0f, 1.4f)
             })
@@ -671,25 +609,13 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                 delay(60_000L)
                 val now = System.currentTimeMillis()
 
-                // Check 1: AppExpireManager (admin cài tay)
+                // Check AppExpireManager (admin cài tay)
                 if (AppExpireManager.isExpired(this@MainActivity)) {
                     if (mainViewModel.isRunning.value == true) {
                         V2RayServiceManager.stopVService(this@MainActivity)
                     }
                     showAppExpiredDialog()
                     break
-                }
-
-                // Check 2: Sub link expire (khi admin chưa cài tay)
-                if (AppExpireManager.getExpireTimestamp(this@MainActivity) == 0L) {
-                    val subExpireTs = getSubLinkExpireTimestamp()
-                    if (subExpireTs > 0L && now > subExpireTs) {
-                        if (mainViewModel.isRunning.value == true) {
-                            V2RayServiceManager.stopVService(this@MainActivity)
-                        }
-                        showAppExpiredDialog(overrideExpireTs = subExpireTs)
-                        break
-                    }
                 }
             }
         }
@@ -743,6 +669,15 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             toast(R.string.title_file_chooser)
             return
         }
+        binding.fab.isEnabled = false
+        startFabSpinLoop()
+        // ✅ FIX: truyền onTimeout callback để cleanup FAB khi dialog tự đóng sau 10 giây.
+        // Trước đây VpnConnectingDialog.show(this) không có callback → timeout chỉ đóng dialog,
+        // fabSpinJob vẫn chạy + fab.isEnabled vẫn false → FAB xoay vĩnh viễn.
+        VpnConnectingDialog.show(this) {
+            stopFabSpinLoop()
+            binding.fab.isEnabled = true
+        }
         V2RayServiceManager.startVService(this)
     }
 
@@ -751,18 +686,90 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
      * - Đang bật  → nền xanh dương đậm + icon stop
      * - Đang tắt  → nền đỏ + icon play
      */
-    private fun applyRunningState(isRunning: Boolean) {
-        if (isRunning) {
-            binding.fab.setImageResource(R.drawable.ic_stop_24dp)
-            binding.fab.backgroundTintList = ColorStateList.valueOf(
-                ContextCompat.getColor(this, R.color.fab_running)
-            )
-        } else {
-            binding.fab.setImageResource(R.drawable.ic_play_24dp)
-            binding.fab.backgroundTintList = ColorStateList.valueOf(
-                ContextCompat.getColor(this, R.color.fab_stopped)
-            )
+    // true sau lần đầu tiên observe isRunning — tránh animate khi app vừa mở
+    private var fabStateInitialized = false
+
+    /**
+     * Xoay FAB liên tục 360° mỗi 600ms — chạy khi đang chờ VPN kết nối.
+     */
+    private fun startFabSpinLoop() {
+        fabSpinJob?.cancel()
+        fabSpinJob = lifecycleScope.launch {
+            // Chờ animation scale-down/up khi bấm FAB xong (~300ms) rồi mới bắt đầu spin
+            kotlinx.coroutines.delay(320)
+            binding.fab.clearAnimation()
+            while (isActive) {
+                binding.fab.animate()
+                    .rotationBy(360f)
+                    .setDuration(600)
+                    .setInterpolator(android.view.animation.LinearInterpolator())
+                    .start()
+                kotlinx.coroutines.delay(620)
+            }
         }
+    }
+
+    /**
+     * Dừng vòng xoay loading FAB — gọi khi VPN đã bật/tắt xong.
+     */
+    private fun stopFabSpinLoop() {
+        fabSpinJob?.cancel()
+        fabSpinJob = null
+        binding.fab.animate().cancel()
+        binding.fab.rotation = 0f
+    }
+
+    private fun applyRunningState(isRunning: Boolean) {
+        // Đóng dialog connecting dù VPN bật thành công hay thất bại — tránh treo dialog
+        VpnConnectingDialog.dismiss()
+        // Dừng vòng xoay loading (nếu đang chạy)
+        stopFabSpinLoop()
+        // Khôi phục FAB sau khi trạng thái thật sự thay đổi
+        binding.fab.isEnabled = true
+
+        if (!fabStateInitialized) {
+            // Lần đầu (app khởi động): set trực tiếp, không animate
+            fabStateInitialized = true
+            if (isRunning) {
+                binding.fab.setImageResource(R.drawable.ic_stop_24dp)
+                binding.fab.backgroundTintList = ColorStateList.valueOf(
+                    ContextCompat.getColor(this, R.color.fab_running)
+                )
+            } else {
+                binding.fab.setImageResource(R.drawable.ic_play_24dp)
+                binding.fab.backgroundTintList = ColorStateList.valueOf(
+                    ContextCompat.getColor(this, R.color.fab_stopped)
+                )
+            }
+            return
+        }
+
+        // ── Hiệu ứng chuyển trạng thái: rotate 360° + pulse ────────────
+        isFabAnimating = true
+        binding.fab.animate()
+            .rotationBy(360f)
+            .scaleX(1.15f).scaleY(1.15f)
+            .setDuration(300)
+            .setInterpolator(DecelerateInterpolator())
+            .withEndAction {
+                if (isRunning) {
+                    binding.fab.setImageResource(R.drawable.ic_stop_24dp)
+                    binding.fab.backgroundTintList = ColorStateList.valueOf(
+                        ContextCompat.getColor(this, R.color.fab_running)
+                    )
+                } else {
+                    binding.fab.setImageResource(R.drawable.ic_play_24dp)
+                    binding.fab.backgroundTintList = ColorStateList.valueOf(
+                        ContextCompat.getColor(this, R.color.fab_stopped)
+                    )
+                }
+                binding.fab.animate()
+                    .scaleX(1f).scaleY(1f)
+                    .setDuration(200)
+                    .setInterpolator(OvershootInterpolator(1.8f))
+                    .withEndAction { isFabAnimating = false }
+                    .start()
+            }.start()
     }
 
     // ================= IMPORT =================
@@ -913,11 +920,9 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
      */
     private fun applyDrawerItemColors() {
         val menu = binding.navView.menu
+        val colorBlue = android.graphics.Color.parseColor("#1565C0")
 
-        val colorBlue   = android.graphics.Color.parseColor("#1565C0")
-        val colorPurple = android.graphics.Color.parseColor("#7B1FA2")
-        val colorOrange = android.graphics.Color.parseColor("#E65100")
-
+        // ── Tô màu xanh dương toàn bộ text các item ──────────────────────
         fun tintItem(itemId: Int, color: Int) {
             val item = menu.findItem(itemId) ?: return
             val spannable = android.text.SpannableString(item.title)
@@ -929,13 +934,23 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             item.title = spannable
         }
 
-        val colorRed    = android.graphics.Color.parseColor("#B71C1C")
-
+        tintItem(R.id.sub_setting,             colorBlue)
         tintItem(R.id.update_tiktok,           colorBlue)
         tintItem(R.id.download_tiktok_plusgin, colorBlue)
         tintItem(R.id.update_yumvpn,           colorBlue)
-        tintItem(R.id.tiktok_downloader,       colorOrange)
-        tintItem(R.id.app_expire_setting,      colorRed)
+        tintItem(R.id.tiktok_downloader,       colorBlue)
+        tintItem(R.id.app_expire_setting,      colorBlue)
+        tintItem(R.id.per_app_proxy_settings,  colorBlue)
+        tintItem(R.id.settings,               colorBlue)
+        tintItem(R.id.about,                  colorBlue)
+
+        // ── Tô màu xanh dương toàn bộ icon ───────────────────────────────
+        binding.navView.itemIconTintList =
+            ColorStateList.valueOf(colorBlue)
+
+        // ── Tô màu xanh dương toàn bộ text (fallback cho item không dùng Spannable) ──
+        binding.navView.itemTextColor =
+            ColorStateList.valueOf(colorBlue)
     }
 
     /**
@@ -982,59 +997,56 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             setPadding(pad, pad, pad, pad)
         }
 
-        // ── Mục 1: Bản không tháo SIM ──────────────────────────────────────
-        container.addView(sectionTitle("📱  Đây là bản không tháo SIM Trung Quốc", "#1565C0"))
-        container.addView(sectionBody("Bản TikTok này được thiết kế để hoạt động mà không cần tháo SIM Trung Quốc. Bạn có thể dùng bình thường với SIM Việt Nam hoặc các SIM khác trong khi vẫn sử dụng VPN để truy cập nội dung."))
+        // ── Mục 1: Giới thiệu ──────────────────────────────────────────────
+        container.addView(sectionTitle("📱  Bản TikTok không cần tháo SIM", "#1565C0"))
+        container.addView(sectionBody("Phiên bản này hoạt động bình thường với SIM Việt Nam, không yêu cầu tháo SIM Trung Quốc. Chỉ cần bật VPN là sử dụng được đầy đủ tính năng."))
 
-        // ── Mục 2: Tại sao cập nhật — NỔI BẬT với khung nền vàng cam ───────
+        // ── Mục 2: Tại sao cập nhật ─────────────────────────────────────────
         val warningBox = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
             val padBox = (12 * dp).toInt()
             setPadding(padBox, padBox, padBox, padBox)
-            setBackgroundColor(android.graphics.Color.parseColor("#FFF8E1"))  // nền vàng nhạt
-            // Bo góc bằng background drawable
             background = android.graphics.drawable.GradientDrawable().apply {
-                setColor(android.graphics.Color.parseColor("#FFF8E1"))
+                setColor(android.graphics.Color.parseColor("#E3F2FD"))
                 cornerRadius = 10 * dp
-                setStroke((2 * dp).toInt(), android.graphics.Color.parseColor("#FF6F00"))
+                setStroke((2 * dp).toInt(), android.graphics.Color.parseColor("#1565C0"))
             }
         }
 
         val warningTitle = android.widget.TextView(this).apply {
             setText(
-                styledText("⚠️  TẠI SAO PHẢI CẬP NHẬT LIÊN TỤC?", "#BF360C"),
+                styledText("ℹ️  TẠI SAO CẦN CẬP NHẬT ĐỊNH KỲ?", "#1565C0"),
                 android.widget.TextView.BufferType.SPANNABLE
             )
             textSize = 14.5f
             setPadding(0, 0, 0, (6 * dp).toInt())
         }
 
-        // Nội dung với từng ý nhấn mạnh riêng
         val warningContent = android.text.SpannableStringBuilder().apply {
             fun bold(s: String) {
                 val start = length
                 append(s)
                 setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
                     start, length, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                setSpan(android.text.style.ForegroundColorSpan(android.graphics.Color.parseColor("#BF360C")),
+                setSpan(android.text.style.ForegroundColorSpan(android.graphics.Color.parseColor("#1565C0")),
                     start, length, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
             fun normal(s: String) { append(s) }
 
-            bold("• TikTok liên tục cập nhật thuật toán phát hiện SIM và địa chỉ IP.")
-            normal(" Mỗi phiên bản mới ra, ứng dụng có thể bắt đầu chặn lại các SIM từ Trung Quốc.\n\n")
+            bold("• TikTok thường xuyên cập nhật cơ chế kiểm tra SIM và IP.")
+            normal(" Mỗi phiên bản mới có thể chặn lại các SIM không phải Trung Quốc.\n\n")
 
-            bold("• Chúng tôi theo dõi liên tục và phát hành bản vá mới")
-            normal(" để vô hiệu hóa cơ chế kiểm tra SIM sau mỗi lần TikTok thay đổi thuật toán.\n\n")
+            bold("• Chúng tôi theo dõi và phát hành bản vá kịp thời")
+            normal(" sau mỗi lần TikTok thay đổi thuật toán.\n\n")
 
-            bold("• Đó là lý do bạn cần cập nhật qua app này")
-            normal(" thay vì qua Play Store — chỉ bản tải từ đây mới đảm bảo hoạt động ổn định.")
+            bold("• Chỉ bản tải từ app này mới đảm bảo hoạt động ổn định,")
+            normal(" không phải bản từ Play Store hay các nguồn khác.")
         }
 
         val warningBody = android.widget.TextView(this).apply {
             setText(warningContent, android.widget.TextView.BufferType.SPANNABLE)
             textSize = 13f
-            setTextColor(android.graphics.Color.parseColor("#3E2723"))
+            setTextColor(android.graphics.Color.parseColor("#0D47A1"))
             setLineSpacing(0f, 1.3f)
         }
 
@@ -1049,12 +1061,12 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         container.addView(warningBox, wrapperParams)
 
         // ── Mục 3: Xóa bản cũ ───────────────────────────────────────────────
-        container.addView(sectionTitle("🗑️  Xóa các bản TikTok cũ trước khi cài", "#B71C1C"))
-        container.addView(sectionBody("Trước khi cài đặt bản TikTok này, hãy gỡ cài đặt hoàn toàn mọi phiên bản TikTok hiện có trên thiết bị. Cài đè lên bản cũ có thể gây lỗi hoặc xung đột dữ liệu."))
+        container.addView(sectionTitle("🗑️  Gỡ TikTok cũ trước khi cài", "#1565C0"))
+        container.addView(sectionBody("Gỡ hoàn toàn mọi phiên bản TikTok hiện có trước khi cài bản này. Cài đè lên bản cũ có thể gây lỗi hoặc xung đột."))
 
         // ── Mục 4: Không cập nhật qua Store ────────────────────────────────
-        container.addView(sectionTitle("🚫  Không cập nhật qua Play Store hoặc chợ ứng dụng", "#E65100"))
-        container.addView(sectionBody("Sau khi cài xong, tuyệt đối không cập nhật TikTok qua Google Play Store, APKPure hoặc bất kỳ chợ ứng dụng nào khác. Việc cập nhật sẽ ghi đè bản đặc biệt này và ứng dụng sẽ không còn hoạt động đúng."))
+        container.addView(sectionTitle("🚫  Không cập nhật qua Play Store", "#1565C0"))
+        container.addView(sectionBody("Sau khi cài xong, không cập nhật TikTok qua Google Play, APKPure hoặc bất kỳ nguồn nào khác. Cập nhật từ bên ngoài sẽ ghi đè và làm mất bản đặc biệt này."))
 
         // ScrollView bọc ngoài → cuộn được trên MỌI kích thước màn hình
         val scrollView = android.widget.ScrollView(this).apply {
@@ -1120,6 +1132,34 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         downloadWatchJob = null
     }
 
+    /**
+     * Mở HttpURLConnection qua HTTP proxy local của V2Ray khi VPN đang bật.
+     *
+     * Lý do cần hàm này:
+     * - Proxy-only mode: V2Ray chỉ tạo HTTP/SOCKS proxy ở 127.0.0.1, KHÔNG tạo tun interface.
+     *   Mọi kết nối mạng thông thường (HttpURLConnection, DownloadManager) đều đi thẳng
+     *   ra ngoài, KHÔNG qua proxy → tải file thất bại khi server chặn IP Việt Nam.
+     * - VPN mode (tun): Nhiều ROM (Samsung, Xiaomi, OPPO) whitelist DownloadManager khỏi
+     *   tun interface → vẫn bypass proxy. Dùng HTTP proxy tường minh để đảm bảo.
+     *
+     * Giải pháp: Luôn inject HTTP proxy tường minh khi VPN đang bật (cả 2 mode).
+     * V2Ray lắng nghe HTTP proxy tại 127.0.0.1:getHttpPort() (mặc định 10809).
+     */
+    private fun openConnectionViaProxy(urlStr: String): java.net.HttpURLConnection {
+        val url = java.net.URL(urlStr)
+        val isVpnRunning = mainViewModel.isRunning.value == true
+        return if (isVpnRunning) {
+            // HTTP proxy tường minh — hoạt động cho cả VPN mode lẫn Proxy-only mode
+            // getHttpPort() = SOCKS port + 1 (v2ray) hoặc SOCKS port (xray) — xem SettingsManager
+            val httpPort = SettingsManager.getHttpPort()
+            val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", httpPort))
+            url.openConnection(proxy) as java.net.HttpURLConnection
+        } else {
+            // VPN tắt → kết nối trực tiếp bình thường
+            url.openConnection() as java.net.HttpURLConnection
+        }
+    }
+
     private fun startDownloadOnce(url: String, fileName: String, title: String, prefKey: String = "", withDialog: Boolean = false) {
         synchronized(this) {
             if (isDownloading) {
@@ -1129,38 +1169,14 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             isDownloading = true
         }
 
-        val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
         val dp = resources.displayMetrics.density
 
-        // Xóa file cũ trước khi tải để tránh dùng cache cũ
-        try {
-            val oldFile = java.io.File(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                fileName
-            )
-            if (oldFile.exists()) oldFile.delete()
-        } catch (_: Exception) {}
-
-        val request = DownloadManager.Request(Uri.parse(url)).apply {
-            setTitle(title)
-            setDescription("Đang tải xuống, vui lòng chờ...")
-            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
-            setMimeType("application/vnd.android.package-archive")
-            setAllowedNetworkTypes(
-                DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE
-            )
-        }
-
-        val downloadId: Long
-        try {
-            downloadId = dm.enqueue(request)
-            pendingDownloadIds[downloadId] = title  // lưu lại để onResume kiểm tra
-        } catch (e: Exception) {
-            resetDownloadState()
-            showCustomToast("✅ Hiện tại chưa cần cập nhật", "#B71C1C")
-            return
-        }
+        // Xóa file cũ trước khi tải để tránh cache cũ
+        val destFile = java.io.File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            fileName
+        )
+        try { if (destFile.exists()) destFile.delete() } catch (_: Exception) {}
 
         // ── Xây dựng dialog tiến trình ────────────────────────────────────
         val root = android.widget.LinearLayout(this).apply {
@@ -1242,90 +1258,89 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             }
         )
 
-        // ── Job theo dõi tiến trình ───────────────────────────────────────
+        // ── Job tải file bằng coroutine + openConnectionViaProxy ─────────
+        // Không dùng DownloadManager vì nó chạy trong process hệ thống riêng,
+        // không đi qua proxy của app dù VPN đang bật (đặc biệt Proxy-only mode).
         downloadWatchJob = lifecycleScope.launch(Dispatchers.IO) {
-            while (isActive) {
-                delay(1_000)
-                val query = DownloadManager.Query().setFilterById(downloadId)
-                val cursor = dm.query(query)
-                if (cursor == null) {
+            try {
+                val conn = openConnectionViaProxy(url)
+                conn.connectTimeout = 30_000
+                conn.readTimeout    = 60_000
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36")
+                conn.connect()
+
+                if (conn.responseCode !in 200..299) {
                     withContext(Dispatchers.Main) {
                         activeProgressDialog?.dismiss()
                         activeProgressDialog = null
                         resetDownloadState()
+                        showCustomToast("❌ Tải thất bại (HTTP ${conn.responseCode}), thử lại sau!", "#B71C1C")
                     }
-                    break
+                    return@launch
                 }
-                cursor.use { c ->
-                    if (!c.moveToFirst()) {
-                        withContext(Dispatchers.Main) {
-                            activeProgressDialog?.dismiss()
-                            activeProgressDialog = null
-                            resetDownloadState()
-                        }
-                        cancel()
-                        return@use
-                    }
 
-                    val statusCol  = c.getColumnIndex(DownloadManager.COLUMN_STATUS)
-                    val bytesCol   = c.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
-                    val totalCol   = c.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
-                    if (statusCol < 0) return@use
+                val totalBytes = conn.contentLengthLong
 
-                    val status     = c.getInt(statusCol)
-                    val downloaded = if (bytesCol >= 0) c.getLong(bytesCol) else 0L
-                    val total      = if (totalCol >= 0) c.getLong(totalCol) else 0L
-                    val percent    = if (total > 0) (downloaded * 100 / total).toInt().coerceIn(0, 99) else 0
-
-                    when (status) {
-                        DownloadManager.STATUS_RUNNING,
-                        DownloadManager.STATUS_PENDING,
-                        DownloadManager.STATUS_PAUSED -> {
-                            withContext(Dispatchers.Main) {
-                                if (total > 0) {
+                destFile.outputStream().use { out ->
+                    val buf = ByteArray(8 * 1024)
+                    var downloaded = 0L
+                    conn.inputStream.use { input ->
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            downloaded += n
+                            if (totalBytes > 0) {
+                                val pct = (downloaded * 100 / totalBytes).toInt().coerceIn(0, 99)
+                                withContext(Dispatchers.Main) {
                                     progressBar.isIndeterminate = false
-                                    progressBar.progress = percent
-                                    tvPercent.text = "$percent%"
-                                    if (percent >= 80) tvNote.visibility = android.view.View.VISIBLE
-                                } else {
+                                    progressBar.progress = pct
+                                    tvPercent.text = "$pct%"
+                                    if (pct >= 80) tvNote.visibility = android.view.View.VISIBLE
+                                }
+                            } else {
+                                withContext(Dispatchers.Main) {
                                     progressBar.isIndeterminate = true
                                     tvPercent.text = "Đang tải..."
                                 }
-                                tvSub.text = "Vui lòng chờ, đừng tắt ứng dụng..."
                             }
-                        }
-
-                        DownloadManager.STATUS_SUCCESSFUL -> {
-                            withContext(Dispatchers.Main) {
-                                pendingDownloadIds.remove(downloadId)
-                                progressBar.isIndeterminate = false
-                                progressBar.progress = 100
-                                tvPercent.text = "100%"
-                                tvSub.text = "Hoàn tất! Đang mở cài đặt..."
-                                resetDownloadState()
-                                if (prefKey.isNotEmpty()) markDownloadedToday(prefKey)
-
-                                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                    activeProgressDialog?.dismiss()
-                                    activeProgressDialog = null
-                                    // ✅ SỬA: dùng tryOpenInstaller thay vì viết lại logic quyền
-                                    tryOpenInstaller(dm, downloadId, title)
-                                }, 800)
-                            }
-                            cancel()
-                        }
-
-                        DownloadManager.STATUS_FAILED -> {
-                            withContext(Dispatchers.Main) {
-                                pendingDownloadIds.remove(downloadId)
-                                activeProgressDialog?.dismiss()
-                                activeProgressDialog = null
-                                resetDownloadState()
-                                showCustomToast("✅ Hiện tại chưa cần cập nhật", "#2E7D32")
-                            }
-                            cancel()
                         }
                     }
+                }
+                conn.disconnect()
+
+                withContext(Dispatchers.Main) {
+                    progressBar.isIndeterminate = false
+                    progressBar.progress = 100
+                    tvPercent.text = "100%"
+                    tvSub.text = "Hoàn tất! Đang mở cài đặt..."
+                    resetDownloadState()
+                    if (prefKey.isNotEmpty()) markDownloadedToday(prefKey)
+
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        activeProgressDialog?.dismiss()
+                        activeProgressDialog = null
+                        // Dùng FileProvider để mở APK installer đúng chuẩn Android 7+
+                        try {
+                            val apkUri = androidx.core.content.FileProvider.getUriForFile(
+                                this@MainActivity,
+                                "$packageName.cache",
+                                destFile
+                            )
+                            launchInstaller(apkUri)
+                        } catch (_: Exception) {
+                            showCustomToast("✅ $title đã tải xong!\nKéo thông báo xuống → bấm vào để cài.", "#2E7D32")
+                        }
+                    }, 800)
+                }
+
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    activeProgressDialog?.dismiss()
+                    activeProgressDialog = null
+                    resetDownloadState()
+                    if (e is CancellationException) return@withContext
+                    showCustomToast("❌ Tải thất bại: ${e.message ?: "lỗi kết nối"}", "#B71C1C")
                 }
             }
         }
@@ -1588,7 +1603,6 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                 if (view is androidx.appcompat.widget.ActionMenuView) {
                     var overflowView: android.widget.ImageView? = null
 
-                    // Ưu tiên: tìm theo class name chứa "Overflow"
                     for (j in 0 until view.childCount) {
                         val child = view.getChildAt(j)
                         val simpleName = child.javaClass.simpleName
@@ -1599,12 +1613,9 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                         }
                     }
 
-                    // Fallback: lấy ImageView cuối cùng trong ActionMenuView
                     if (overflowView == null && view.childCount > 0) {
                         val last = view.getChildAt(view.childCount - 1)
-                        if (last is android.widget.ImageView) {
-                            overflowView = last
-                        }
+                        if (last is android.widget.ImageView) overflowView = last
                     }
 
                     overflowView?.apply {
@@ -1620,6 +1631,8 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                             lp.marginEnd = (8 * dp).toInt()
                             layoutParams = lp
                         }
+                        // ✅ Thay popup menu bằng BottomSheet — icon hiện 100% mọi ROM
+                        setOnClickListener { showMainMenuBottomSheet() }
                     }
                     break
                 }
@@ -1627,91 +1640,137 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         } catch (e: Exception) { }
     }
 
-    override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menuInflater.inflate(R.menu.menu_main, menu)
+    /**
+     * BottomSheetDialog thay thế overflow menu — icon hiện 100% trên mọi thiết bị thật.
+     * Không dùng reflection, không phụ thuộc ROM.
+     */
+    private fun showMainMenuBottomSheet() {
+        val dp = resources.displayMetrics.density
+        val colorBlue = android.graphics.Color.parseColor("#1565C0")
+        val colorRed  = android.graphics.Color.parseColor("#B71C1C")
 
-        // Dùng post + postDelayed để đảm bảo toolbar render xong trên MỌI thiết bị thật
+        class MenuEntry(val iconRes: Int, val label: String, val tint: Int = colorBlue, val action: () -> Unit)
+
+        val items = listOf(
+            MenuEntry(R.drawable.ic_admin,             "Kích hoạt đại lý")       { importShopOtp() },
+            MenuEntry(R.drawable.ic_qr_code,           "Quét mã QR")             { importQRcode() },
+            MenuEntry(R.drawable.ic_clipboard,         "Dán từ clipboard")       { importClipboard() },
+            MenuEntry(R.drawable.ic_action_done,       "Kích hoạt nhanh")        { importQrOtp() },
+            MenuEntry(R.drawable.ic_lock_24dp,         "Kích hoạt 1 năm")        { importYearOtp() },
+            MenuEntry(R.drawable.ic_restore_24dp,      "Khởi động lại ứng dụng") {
+                toast(R.string.title_service_restart)
+                val intent = packageManager.getLaunchIntentForPackage(packageName)
+                intent?.addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                startActivity(intent)
+            },
+            MenuEntry(iconRes = R.drawable.ic_delete_24dp, label = "Xoá tất cả máy chủ", tint = colorBlue, action = {
+                val count = mainViewModel.removeAllServer()
+                mainViewModel.reloadServerList()
+                setupGroupTab()
+                toast(getString(R.string.title_del_config_count, count))
+            }),
+            MenuEntry(R.drawable.ic_feedback_24dp,     "Ping tất cả máy chủ")   {
+                if (mainViewModel.serversCache.isEmpty()) toast(R.string.title_file_chooser)
+                else { mainViewModel.testAllTcping(); toast(R.string.title_ping_all_server) }
+            },
+            MenuEntry(R.drawable.ic_subscriptions_24dp, "Cập nhật máy chủ")     { importConfigViaSub() },
+        )
+
+        val sheet = com.google.android.material.bottomsheet.BottomSheetDialog(this)
+
+        // Giới hạn width = 98% màn hình, căn giữa
+        val screenWidth = resources.displayMetrics.widthPixels
+        val sheetWidth = (screenWidth * 0.98f).toInt()
+
+        val container = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding((6 * dp).toInt(), (8 * dp).toInt(), (6 * dp).toInt(), (16 * dp).toInt())
+            // Bo tròn 4 góc
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(android.graphics.Color.WHITE)
+                cornerRadius = 20 * dp
+            }
+            layoutParams = android.widget.FrameLayout.LayoutParams(sheetWidth, android.widget.FrameLayout.LayoutParams.WRAP_CONTENT).also {
+                it.gravity = android.view.Gravity.CENTER_HORIZONTAL
+            }
+        }
+
+        // Handle kéo ở đỉnh
+        val handle = android.view.View(this).apply {
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                (40 * dp).toInt(), (4 * dp).toInt()
+            ).also {
+                it.gravity = android.view.Gravity.CENTER_HORIZONTAL
+                it.topMargin = (10 * dp).toInt()
+                it.bottomMargin = (8 * dp).toInt()
+            }
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(android.graphics.Color.parseColor("#DDDDDD"))
+                cornerRadius = 99 * dp
+            }
+        }
+        container.addView(handle)
+
+        for (entry in items) {
+            val row = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding((24 * dp).toInt(), (13 * dp).toInt(), (24 * dp).toInt(), (13 * dp).toInt())
+                isClickable = true
+                isFocusable = true
+                background = with(android.util.TypedValue()) {
+                    theme.resolveAttribute(android.R.attr.selectableItemBackground, this, true)
+                    ContextCompat.getDrawable(this@MainActivity, resourceId)
+                }
+            }
+            val iconSize = (22 * dp).toInt()
+            val icon = android.widget.ImageView(this).apply {
+                layoutParams = android.widget.LinearLayout.LayoutParams(iconSize, iconSize).also {
+                    it.marginEnd = (16 * dp).toInt()
+                }
+                setImageResource(entry.iconRes)
+                imageTintList = android.content.res.ColorStateList.valueOf(entry.tint)
+                scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            }
+            val label = android.widget.TextView(this).apply {
+                text = entry.label
+                textSize = 15f
+                setTextColor(entry.tint)
+                typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+            }
+            row.addView(icon)
+            row.addView(label)
+            // Set lại màu sau khi add vào layout để đảm bảo không bị override
+            icon.imageTintList = android.content.res.ColorStateList.valueOf(entry.tint)
+            label.setTextColor(entry.tint)
+            row.setOnClickListener { sheet.dismiss(); entry.action() }
+            container.addView(row)
+        }
+
+        val scrollView = android.widget.ScrollView(this).apply {
+            addView(container)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        }
+        sheet.setContentView(scrollView)
+        sheet.window?.apply {
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+            setLayout(sheetWidth, android.view.WindowManager.LayoutParams.WRAP_CONTENT)
+        }
+        sheet.show()
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        // ✅ Vẫn inflate menu_main để Android tạo ra nút overflow (dấu +) trên toolbar
+        // replaceOverflowIcon() hook vào nút đó và gắn BottomSheet thay popup menu
+        menuInflater.inflate(R.menu.menu_main, menu)
         binding.toolbar.post {
             binding.toolbar.postDelayed({
                 replaceOverflowIcon()
             }, 150)
         }
-
         return true
     }
 
-    override fun onMenuOpened(featureId: Int, menu: Menu): Boolean {
-        // Set width popup menu = 70% chiều ngang màn hình
-        try {
-            val screenWidth = resources.displayMetrics.widthPixels
-            val targetWidth = (screenWidth * 0.70).toInt()
-            val field = menu.javaClass.getDeclaredField("mPopup")
-            field.isAccessible = true
-            val popup = field.get(menu)
-            val listPopup = popup?.javaClass?.getDeclaredMethod("getPopup")
-                ?.apply { isAccessible = true }?.invoke(popup)
-            listPopup?.javaClass?.getDeclaredMethod("setWidth", Int::class.java)
-                ?.apply { isAccessible = true }?.invoke(listPopup, targetWidth)
-        } catch (e: Exception) {
-            // ignore nếu reflection không hoạt động trên device này
-        }
-        return super.onMenuOpened(featureId, menu)
-    }
-
-    override fun onPrepareOptionsMenu(menu: Menu): Boolean {
-        try {
-            val method = menu.javaClass.getDeclaredMethod("setOptionalIconsVisible", Boolean::class.java)
-            method.isAccessible = true
-            method.invoke(menu, true)
-        } catch (e: Exception) {
-            // ignore
-        }
-
-        val colorBlue = android.graphics.Color.parseColor("#2196F3")
-        val iconSizePx = (20 * resources.displayMetrics.density).toInt()
-
-        fun styleMenuItem(item: android.view.MenuItem) {
-            // Tất cả chữ và icon đều màu xanh dương
-            val color = colorBlue
-
-            // 1. Màu chữ
-            val span = android.text.SpannableString(item.title)
-            span.setSpan(
-                android.text.style.ForegroundColorSpan(color),
-                0, span.length,
-                android.text.Spannable.SPAN_INCLUSIVE_INCLUSIVE
-            )
-            item.title = span
-
-            // 2. Màu icon + thu nhỏ xuống 20dp
-            item.icon?.let { drawable ->
-                val tinted = drawable.mutate().apply { setTint(color) }
-                val w = tinted.intrinsicWidth.coerceAtLeast(1)
-                val h = tinted.intrinsicHeight.coerceAtLeast(1)
-                val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
-                val canvas = android.graphics.Canvas(bmp)
-                tinted.setBounds(0, 0, w, h)
-                tinted.draw(canvas)
-                item.icon = android.graphics.drawable.BitmapDrawable(
-                    resources,
-                    android.graphics.Bitmap.createScaledBitmap(bmp, iconSizePx, iconSizePx, true)
-                )
-            }
-        }
-
-        for (i in 0 until menu.size()) {
-            val item = menu.getItem(i)
-            styleMenuItem(item)
-            val sub = item.subMenu
-            if (sub != null) {
-                for (j in 0 until sub.size()) {
-                    styleMenuItem(sub.getItem(j))
-                }
-            }
-        }
-
-        return super.onPrepareOptionsMenu(menu)
-    }
 
     // ✅ Debounce: chống double-tap mở 2 dialog liên tiếp
     private var lastDialogOpenMs = 0L
@@ -2054,7 +2113,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         fun loadThumb(url: String) {
             lifecycleScope.launch(Dispatchers.IO) {
                 try {
-                    val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                    val conn = openConnectionViaProxy(url)
                     conn.connectTimeout = 5_000
                     conn.readTimeout = 5_000
                     conn.connect()
@@ -2101,7 +2160,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                     val apiUrl = "https://www.tikwm.com/api/?url=${java.net.URLEncoder.encode(url, "UTF-8")}&hd=1"
                     // Timeout 40 giây
                     val result = kotlinx.coroutines.withTimeout(40_000L) {
-                        val conn = java.net.URL(apiUrl).openConnection() as java.net.HttpURLConnection
+                        val conn = openConnectionViaProxy(apiUrl)
                         conn.connectTimeout = 40_000
                         conn.readTimeout = 40_000
                         conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
@@ -2118,7 +2177,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                         if (msg.contains("limit") || msg.contains("too many") || msg.contains("frequent")) {
                             delay(2_000)
                             // Gọi lại API lần 2
-                            val retryConn = java.net.URL(apiUrl).openConnection() as java.net.HttpURLConnection
+                            val retryConn = openConnectionViaProxy(apiUrl)
                             retryConn.connectTimeout = 40_000
                             retryConn.readTimeout = 40_000
                             retryConn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
@@ -2416,8 +2475,8 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                     var savedMediaUri: android.net.Uri? = null
 
                     try {
-                        // 1. Mở kết nối HTTP
-                        val conn = java.net.URL(currentVideoUrl).openConnection() as java.net.HttpURLConnection
+                        // 1. Mở kết nối HTTP qua proxy (nếu VPN đang bật)
+                        val conn = openConnectionViaProxy(currentVideoUrl)
                         conn.connectTimeout = 30_000
                         conn.readTimeout    = 60_000
                         conn.setRequestProperty(
@@ -2864,12 +2923,14 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                 }
                 else -> {
                     binding.tvToolbarExpire.text = "Ngày hết hạn: $dateStr · ${formatTimeLeft(deviceExpireTs)}"
-                    binding.tvToolbarExpire.setTextColor(android.graphics.Color.parseColor("#E65100"))
+                    // Cài tay trên app → xanh dương
+                    binding.tvToolbarExpire.setTextColor(android.graphics.Color.parseColor("#1565C0"))
                 }
             }
             binding.tvToolbarExpire.post {
                 binding.tvToolbarExpire.isSelected = false
                 binding.tvToolbarExpire.isSelected = true
+                binding.tvToolbarExpire.setBackgroundColor(android.graphics.Color.TRANSPARENT)
             }
             return
         }
@@ -2901,6 +2962,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         binding.tvToolbarExpire.post {
             binding.tvToolbarExpire.isSelected = false
             binding.tvToolbarExpire.isSelected = true
+            binding.tvToolbarExpire.setBackgroundColor(android.graphics.Color.TRANSPARENT)
         }
     }
 
@@ -2923,14 +2985,11 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                 setStroke(2, color)
             }
         }
-        // Hiện 2 toast liên tiếp để kéo dài ~4 giây
-        repeat(2) {
-            android.widget.Toast(this).apply {
-                duration = android.widget.Toast.LENGTH_LONG
-                @Suppress("DEPRECATION")
-                view = tv
-                setGravity(android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL, 0, (80 * dp).toInt())
-            }.show()
-        }
+        android.widget.Toast(this).apply {
+            duration = android.widget.Toast.LENGTH_SHORT
+            @Suppress("DEPRECATION")
+            view = tv
+            setGravity(android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL, 0, (80 * dp).toInt())
+        }.show()
     }
 }

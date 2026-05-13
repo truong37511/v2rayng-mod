@@ -21,7 +21,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Dialog nhập OTP → verify TOTP → gọi API lấy sub link gói 1 năm → import vào V2RayNG.
+ * Dialog nhập OTP → verify TOTP → gọi API lấy raw config từ QR gói 1 năm → import vào V2RayNG.
  * Dùng cho chức năng "Admin 1 năm"
  *
  * @param activity Activity cha
@@ -97,7 +97,7 @@ class OtpYearDialog(
         // Title
         val tvTitle = TextView(activity).apply {
             text = "Gói đăng ký 1 năm"
-            textSize = 22f
+            textSize = 18f
             setTextColor(Color.parseColor("red"))
             typeface = android.graphics.Typeface.DEFAULT_BOLD
             layoutParams = android.widget.LinearLayout.LayoutParams(
@@ -269,12 +269,11 @@ class OtpYearDialog(
                 is SubYearFetcher.FetchResult.Success -> {
                     val imported = tryImportSubContent(result.subContent)
                     if (imported) {
-                        setState(State.SUCCESS, "✅ Tải gói 1 năm thành công — Gói đã được áp dụng.")
+                        val successColor = if (result.expireSource == "manual") "#1565C0" else "#E65100"
+                        setState(State.SUCCESS, "✅ Tải gói 1 năm thành công — Gói đã được áp dụng.", successColor)
                         onImportSuccess?.invoke()
-                        // Hiển thị 3.5 giây rồi tự đóng
-                        etOtp.postDelayed({
-                            dialog.dismiss()
-                        }, 3500)
+                        // Hiển thị 2 giây rồi tự đóng
+                        etOtp.postDelayed({ dialog.dismiss() }, 2000)
                     } else {
                         setState(
                             State.ERROR,
@@ -290,20 +289,25 @@ class OtpYearDialog(
         }
     }
 
+    /**
+     * Import raw config (vmess://, vless://, base64, ...) từ QR decode vào V2RayNG.
+     */
     private suspend fun tryImportSubContent(subContent: String): Boolean {
         return try {
-            val (configCount, subCount) = withContext(Dispatchers.IO) {
-                com.v2ray.ang.handler.AngConfigManager.importBatchConfig(
-                    subContent, "", false
+            val trimmed = subContent.trim()
+            withContext(Dispatchers.IO) {
+                val (configCount, subCount) = com.v2ray.ang.handler.AngConfigManager.importBatchConfig(
+                    trimmed, "", false
                 )
+                configCount > 0 || subCount > 0
             }
-            configCount > 0 || subCount > 0
         } catch (e: Exception) {
+            android.util.Log.e("OtpYearDialog", "tryImportSubContent exception", e)
             false
         }
     }
 
-    private fun setState(state: State, message: String = "") {
+    private fun setState(state: State, message: String = "", successColor: String = "#1565C0") {
         when (state) {
             State.INPUT -> {
                 progressBar.visibility = android.view.View.GONE
@@ -321,7 +325,7 @@ class OtpYearDialog(
             State.SUCCESS -> {
                 progressBar.visibility = android.view.View.GONE
                 tvStatus.text = message
-                tvStatus.setTextColor(Color.parseColor("#2E7D32"))
+                tvStatus.setTextColor(Color.parseColor(successColor))
                 btnCancel.text = "Đóng"
                 btnCancel.isEnabled = true
             }

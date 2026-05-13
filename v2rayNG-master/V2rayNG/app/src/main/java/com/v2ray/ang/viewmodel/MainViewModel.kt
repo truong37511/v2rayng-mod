@@ -47,10 +47,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val isRunning by lazy { MutableLiveData<Boolean>() }
     val updateListAction by lazy { MutableLiveData<Int>() }
     val updateTestResultAction by lazy { MutableLiveData<String>() }
+    // Emit true khi VPN fail — để MainActivity dismiss dialog dù isRunning không đổi
+    val vpnStartFailed by lazy { MutableLiveData<Boolean>() }
     private val tcpingTestScope by lazy { CoroutineScope(Dispatchers.IO) }
 
     fun startListenBroadcast() {
         isRunning.value = false
+        vpnStartFailed.value = false  // reset để tránh emit lại giá trị cũ khi recreate
         val mFilter = IntentFilter(AppConfig.BROADCAST_ACTION_ACTIVITY)
         ContextCompat.registerReceiver(getApplication(), mMsgReceiver, mFilter, Utils.receiverFlags())
         MessageUtil.sendMsg2Service(getApplication(), AppConfig.MSG_REGISTER_CLIENT, "")
@@ -442,6 +445,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 AppConfig.MSG_STATE_START_FAILURE -> {
                     getApplication<AngApplication>().toastError(R.string.toast_services_failure)
                     isRunning.value = false
+                    vpnStartFailed.value = true  // dismiss dialog dù isRunning không đổi
                 }
 
                 AppConfig.MSG_STATE_STOP_SUCCESS -> {

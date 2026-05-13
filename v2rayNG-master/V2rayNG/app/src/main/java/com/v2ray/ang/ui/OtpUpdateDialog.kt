@@ -109,8 +109,8 @@ class OtpUpdateDialog(
 
         // Title
         tvTitle = TextView(activity).apply {
-            text = "Admin mã nhỏ"
-            textSize = 22f
+            text = "Kích hoạt nhanh 5 phút"
+            textSize = 18f
             setTextColor(Color.parseColor("red"))
             typeface = android.graphics.Typeface.DEFAULT_BOLD
             layoutParams = android.widget.LinearLayout.LayoutParams(

@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.R
@@ -123,9 +124,8 @@ object V2RayServiceManager {
 
         if (MmkvManager.decodeSettingsBool(AppConfig.PREF_PROXY_SHARING)) {
             context.toast(R.string.toast_warning_pref_proxysharing_short)
-        } else {
-            context.toast(R.string.toast_services_start)
         }
+        // Dialog "Đang kết nối" được show từ MainActivity.startV2Ray() → VpnConnectingDialog.show()
 
         val isVpnMode = SettingsManager.isVpnMode()
         val intent = if (isVpnMode) {
@@ -415,4 +415,6 @@ object V2RayServiceManager {
             }
         }
     }
+
+
 }

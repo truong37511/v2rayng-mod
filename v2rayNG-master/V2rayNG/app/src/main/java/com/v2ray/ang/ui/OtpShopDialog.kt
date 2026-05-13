@@ -20,13 +20,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * Dialog nhập OTP → verify TOTP → gọi API lấy sub link toàn bộ gói → import vào V2RayNG.
- * Dùng cho chức năng "Admin cửa hàng"
- *
- * @param activity Activity cha
- * @param onImportSuccess Callback được gọi sau khi import thành công
- */
 class OtpShopDialog(
     private val activity: AppCompatActivity,
     private val onImportSuccess: (() -> Unit)? = null
@@ -54,7 +47,6 @@ class OtpShopDialog(
 
         dialog.show()
 
-        // Xóa dim overlay khi dialog đóng — tránh màn hình bị tối/nâu
         dialog.setOnDismissListener {
             activity.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
         }
@@ -70,7 +62,6 @@ class OtpShopDialog(
         val card = androidx.cardview.widget.CardView(activity).apply {
             radius = dp(20).toFloat()
             cardElevation = dp(12).toFloat()
-            // Light theme: nền trắng, phân biệt với OtpUpdateDialog bằng accent xanh lá
             setCardBackgroundColor(Color.parseColor("#FFFFFF"))
             layoutParams = android.widget.LinearLayout.LayoutParams(
                 android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
@@ -83,7 +74,6 @@ class OtpShopDialog(
             setPadding(dp(28), dp(28), dp(28), dp(24))
         }
 
-        // Accent bar trên cùng — xanh lá
         val accentBar = android.view.View(activity).apply {
             background = android.graphics.drawable.GradientDrawable(
                 android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT,
@@ -95,10 +85,9 @@ class OtpShopDialog(
         }
         inner.addView(accentBar)
 
-        // Title
         val tvTitle = TextView(activity).apply {
-            text = "Mã nhập tại cửa hàng"
-            textSize = 22f
+            text = "Kích hoạt đại lý"
+            textSize = 18f
             setTextColor(Color.parseColor("red"))
             typeface = android.graphics.Typeface.DEFAULT_BOLD
             layoutParams = android.widget.LinearLayout.LayoutParams(
@@ -108,7 +97,6 @@ class OtpShopDialog(
         }
         inner.addView(tvTitle)
 
-        // Subtitle
         val tvSub = TextView(activity).apply {
             text = "Nhập mã xác minh từ Google Authenticator ."
             textSize = 15f
@@ -120,7 +108,6 @@ class OtpShopDialog(
         }
         inner.addView(tvSub)
 
-        // Hint
         val tvHint = TextView(activity).apply {
             text = "Chức năng này chỉ dành cho Admin"
             textSize = 13f
@@ -132,7 +119,6 @@ class OtpShopDialog(
         }
         inner.addView(tvHint)
 
-        // OTP Input — rộng hơn, nền xanh nhạt sáng
         etOtp = EditText(activity).apply {
             hint = "******"
             inputType = android.text.InputType.TYPE_CLASS_NUMBER
@@ -167,7 +153,6 @@ class OtpShopDialog(
             if (etOtp.text.isNotEmpty()) etOtp.setText("")
         }
 
-        // Progress bar
         progressBar = ProgressBar(activity).apply {
             visibility = android.view.View.GONE
             isIndeterminate = true
@@ -183,7 +168,6 @@ class OtpShopDialog(
         }
         inner.addView(pbWrap)
 
-        // Status text
         tvStatus = TextView(activity).apply {
             text = ""
             textSize = 13f
@@ -199,7 +183,6 @@ class OtpShopDialog(
         }
         inner.addView(tvStatus)
 
-        // Nút Huỷ
         val btnRow = android.widget.LinearLayout(activity).apply {
             orientation = android.widget.LinearLayout.HORIZONTAL
             layoutParams = android.widget.LinearLayout.LayoutParams(
@@ -266,24 +249,20 @@ class OtpShopDialog(
 
         activity.lifecycleScope.launch {
             when (val result = SubConfigFetcher.fetchSubConfig()) {
-
                 is SubConfigFetcher.FetchResult.Success -> {
                     val imported = tryImportSubContent(result.subContent)
                     if (imported) {
-                        setState(State.SUCCESS, "✅ Tải gói thành công — Gói đã được áp dụng.")
+                        val successColor = if (result.expireSource == "manual") "#1565C0" else "#E65100"
+                        setState(State.SUCCESS, "✅ Tải gói thành công — Gói đã được áp dụng.", successColor)
                         onImportSuccess?.invoke()
-                        // Hiển thị 3.5 giây rồi tự đóng
-                        etOtp.postDelayed({
-                            dialog.dismiss()
-                        }, 3500)
+                        etOtp.postDelayed({ dialog.dismiss() }, 2000)
                     } else {
                         setState(
                             State.ERROR,
-                            "Gói đã có trên thiết bị.\nKhông cần nhập lại."
+                            "Không thể tải server từ gói đăng ký.\nVui lòng kiểm tra kết nối và thử lại."
                         )
                     }
                 }
-
                 is SubConfigFetcher.FetchResult.Error -> {
                     setState(State.ERROR, result.message)
                 }
@@ -291,23 +270,25 @@ class OtpShopDialog(
         }
     }
 
-    // FIX: đổi thành suspend + withContext(Dispatchers.IO) để importBatchConfig
-    // (và updateConfigViaSubAll → HttpUtil.getUrlContentWithUserAgent bên trong)
-    // không chạy trên Main thread → tránh NetworkOnMainThreadException
+    /**
+     * Import raw config (vmess://, vless://, base64, ...) từ QR decode vào V2RayNG.
+     */
     private suspend fun tryImportSubContent(subContent: String): Boolean {
         return try {
-            val (configCount, subCount) = withContext(Dispatchers.IO) {
-                com.v2ray.ang.handler.AngConfigManager.importBatchConfig(
-                    subContent, "", false
+            val trimmed = subContent.trim()
+            withContext(Dispatchers.IO) {
+                val (configCount, subCount) = com.v2ray.ang.handler.AngConfigManager.importBatchConfig(
+                    trimmed, "", false
                 )
+                configCount > 0 || subCount > 0
             }
-            configCount > 0 || subCount > 0
         } catch (e: Exception) {
+            android.util.Log.e("OtpShopDialog", "tryImportSubContent exception", e)
             false
         }
     }
 
-    private fun setState(state: State, message: String = "") {
+    private fun setState(state: State, message: String = "", successColor: String = "#1565C0") {
         when (state) {
             State.INPUT -> {
                 progressBar.visibility = android.view.View.GONE
@@ -325,7 +306,7 @@ class OtpShopDialog(
             State.SUCCESS -> {
                 progressBar.visibility = android.view.View.GONE
                 tvStatus.text = message
-                tvStatus.setTextColor(Color.parseColor("#2E7D32"))
+                tvStatus.setTextColor(Color.parseColor(successColor))
                 btnCancel.text = "Đóng"
                 btnCancel.isEnabled = true
             }
@@ -335,7 +316,6 @@ class OtpShopDialog(
                 tvStatus.setTextColor(Color.parseColor("#E53935"))
                 btnCancel.isEnabled = true
                 etOtp.isEnabled = true
-                // Xóa OTP cũ và focus lại để user nhập mã mới
                 etOtp.postDelayed({
                     etOtp.setText("")
                     etOtp.requestFocus()

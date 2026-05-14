@@ -347,7 +347,7 @@ object Utils {
             // '+' is a literal plus and MUST NOT be interpreted as space.
             // Inputs using '+' for spaces are non-conforming and rejected deliberately
             // to avoid cross-language interoperability issues.
-            URLDecoder.decode(url.replace("+", "%2B"), Charsets.UTF_8.toString())
+            URLDecoder.decode(url, Charsets.UTF_8.toString())
         } catch (e: Exception) {
             Log.e(AppConfig.TAG, "Failed to decode encodeURIComponent", e)
             url
@@ -356,7 +356,7 @@ object Utils {
 
     /**
      * Encode a string to "encodeURIComponent" format.
-     * 
+     *
      * @param url The string to encode.
      * @return The "encodeURIComponent" encoded string, or the original string if encoding fails.
      */

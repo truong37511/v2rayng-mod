@@ -12,12 +12,16 @@ import java.net.Proxy
 import java.util.concurrent.TimeUnit
 
 /**
- * Gọi API lấy QR cửa hàng (toàn bộ gói đăng ký) → chỉ dùng ảnh QR
+ * Gọi API lấy gói cửa hàng → ưu tiên sub_url, fallback sang ảnh QR.
  * Dùng cho chức năng "Admin cửa hàng"
  *
  * Thứ tự fetch:
  *   1. Direct (không proxy)
  *   2. Nếu lỗi mạng/timeout → thử lại qua HTTP Proxy
+ *
+ * Thứ tự lấy config trong mỗi lần fetch:
+ *   a. Thử dùng sub_url (link sub trực tiếp) nếu API trả về
+ *   b. Nếu sub_url trống/lỗi → fallback decode ảnh QR
  */
 object SubConfigFetcher {
 
@@ -42,7 +46,8 @@ object SubConfigFetcher {
 
     sealed class FetchResult {
         data class Success(
-            val subContent: String,
+            val subContent: String,   // base64 body — dự phòng nếu cần
+            val subUrl: String = "",  // URL gốc của sub link — dùng để import đúng cách
             val qrId: Int,
             val expireDate: Long = 0L,
             val expireSource: String = "auto"
@@ -107,7 +112,39 @@ object SubConfigFetcher {
             val metaSource = meta.optString("expire_source", "auto").trim()
             Log.d("SubConfigFetcher", "[$tag] expire=$metaExpire source=$metaSource")
 
-            // ── Bước 3: Ưu tiên ảnh QR trước ────────────────────────────
+            val expireArg = if (metaExpire > 0L) metaExpire else 0L
+
+            // ── Bước 3a: Ưu tiên sub_url — fetch nội dung thực sự ────────
+            val subUrl = meta.optString("sub_url", "").trim()
+            if (subUrl.isNotBlank()) {
+                Log.d("SubConfigFetcher", "[$tag] Thử fetch sub_url: $subUrl")
+                val subResp = runCatching {
+                    client.newCall(Request.Builder().url(subUrl).build()).execute()
+                }.getOrNull()
+
+                if (subResp != null && subResp.isSuccessful) {
+                    val subBody = runCatching { subResp.body?.string() }.getOrNull()?.trim()
+
+                    if (!subBody.isNullOrBlank()) {
+                        // Đọc expire từ header Subscription-Userinfo — ưu tiên hơn giá trị admin
+                        val userinfoHeader = subResp.header("subscription-userinfo") ?: ""
+                        val headerExpireTs = Regex("expire=(\\d+)", RegexOption.IGNORE_CASE)
+                            .find(userinfoHeader)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+
+                        // Ưu tiên: (1) header sub link, (2) expire từ admin API
+                        val finalExpire = if (headerExpireTs > 0L) headerExpireTs else expireArg
+                        val finalSource = if (headerExpireTs > 0L) "sub" else metaSource
+
+                        Log.d("SubConfigFetcher", "[$tag] sub_url fetch OK, body=${subBody.length} chars, expire=$finalExpire (header=$headerExpireTs admin=$expireArg)")
+                        return FetchResult.Success(subBody, subUrl, qrId, finalExpire, finalSource)
+                    }
+                    Log.w("SubConfigFetcher", "[$tag] sub_url trả về body rỗng, fallback sang QR.")
+                } else {
+                    Log.w("SubConfigFetcher", "[$tag] sub_url HTTP ${subResp?.code}, fallback sang QR.")
+                }
+            }
+
+            // ── Bước 3b: Fallback decode ảnh QR ──────────────────────────
             val imageUrl = meta.optString("url", "").trim()
             if (imageUrl.isNotBlank()) {
                 Log.d("SubConfigFetcher", "[$tag] Thử download + decode QR từ: $imageUrl")
@@ -122,7 +159,7 @@ object SubConfigFetcher {
 
                 if (!qrContent.isNullOrBlank()) {
                     Log.d("SubConfigFetcher", "[$tag] Decode QR thành công")
-                    return FetchResult.Success(qrContent, qrId, if (metaExpire > 0L) metaExpire else 0L, metaSource)
+                    return FetchResult.Success(qrContent, "", qrId, expireArg, metaSource)
                 }
                 Log.w("SubConfigFetcher", "[$tag] Decode QR thất bại.")
             }

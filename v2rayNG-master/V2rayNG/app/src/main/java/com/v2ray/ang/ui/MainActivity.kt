@@ -1340,7 +1340,20 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                     activeProgressDialog = null
                     resetDownloadState()
                     if (e is CancellationException) return@withContext
-                    showCustomToast("❌ Tải thất bại: ${e.message ?: "lỗi kết nối"}", "#B71C1C")
+                    val errMsg = e.message?.lowercase() ?: ""
+                    val toastMsg = if (
+                        errMsg.contains("connection reset") ||
+                        errMsg.contains("connect") ||
+                        errMsg.contains("reset") ||
+                        errMsg.contains("timeout") ||
+                        errMsg.contains("refused") ||
+                        errMsg.contains("failed to connect")
+                    ) {
+                        "⚠️ Thiết bị này cần bật VPN lên trước!"
+                    } else {
+                        "❌ Tải thất bại: ${e.message ?: "lỗi kết nối"}"
+                    }
+                    showCustomToast(toastMsg, "#E65100")
                 }
             }
         }

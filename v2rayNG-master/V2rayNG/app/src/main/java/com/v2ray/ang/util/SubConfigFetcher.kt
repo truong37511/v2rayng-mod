@@ -12,16 +12,12 @@ import java.net.Proxy
 import java.util.concurrent.TimeUnit
 
 /**
- * Gọi API lấy gói cửa hàng → ưu tiên sub_url, fallback sang ảnh QR.
+ * Gọi API lấy gói cửa hàng → decode ảnh QR.
  * Dùng cho chức năng "Admin cửa hàng"
  *
  * Thứ tự fetch:
  *   1. Direct (không proxy)
  *   2. Nếu lỗi mạng/timeout → thử lại qua HTTP Proxy
- *
- * Thứ tự lấy config trong mỗi lần fetch:
- *   a. Thử dùng sub_url (link sub trực tiếp) nếu API trả về
- *   b. Nếu sub_url trống/lỗi → fallback decode ảnh QR
  */
 object SubConfigFetcher {
 
@@ -46,8 +42,7 @@ object SubConfigFetcher {
 
     sealed class FetchResult {
         data class Success(
-            val subContent: String,   // base64 body — dự phòng nếu cần
-            val subUrl: String = "",  // URL gốc của sub link — dùng để import đúng cách
+            val subContent: String,
             val qrId: Int,
             val expireDate: Long = 0L,
             val expireSource: String = "auto"
@@ -56,21 +51,21 @@ object SubConfigFetcher {
     }
 
     suspend fun fetchSubConfig(): FetchResult = withContext(Dispatchers.IO) {
-        // Thử direct trước
-        val directResult = doFetch(useProxy = false)
-        if (directResult is FetchResult.Success) return@withContext directResult
+        // Ưu tiên proxy trước — user đã bật VPN trước khi gọi API
+        val proxyResult = doFetch(useProxy = true)
+        if (proxyResult is FetchResult.Success) return@withContext proxyResult
 
-        val directErr = directResult as FetchResult.Error
+        val proxyErr = proxyResult as FetchResult.Error
 
-        // Chỉ fallback proxy khi lỗi mạng thực sự (không reach server)
-        // Nếu server đã phản hồi nhưng không có data → không cần thử proxy
-        if (!directErr.isNetworkError) {
-            Log.w("SubConfigFetcher", "Server phản hồi nhưng không có data, không fallback proxy.")
-            return@withContext directErr
+        // Server phản hồi qua proxy nhưng không có data → không cần thử direct
+        if (!proxyErr.isNetworkError) {
+            Log.w("SubConfigFetcher", "Server phản hồi qua proxy nhưng không có data, không fallback direct.")
+            return@withContext proxyErr
         }
 
-        Log.w("SubConfigFetcher", "Direct thất bại do mạng (${directErr.message}), thử qua proxy...")
-        doFetch(useProxy = true)
+        // Proxy thất bại (VPN chưa bật / port chưa mở) → fallback direct dự phòng
+        Log.w("SubConfigFetcher", "Proxy thất bại (${proxyErr.message}), thử direct dự phòng...")
+        doFetch(useProxy = false)
     }
 
     private fun doFetch(useProxy: Boolean): FetchResult {
@@ -114,37 +109,7 @@ object SubConfigFetcher {
 
             val expireArg = if (metaExpire > 0L) metaExpire else 0L
 
-            // ── Bước 3a: Ưu tiên sub_url — fetch nội dung thực sự ────────
-            val subUrl = meta.optString("sub_url", "").trim()
-            if (subUrl.isNotBlank()) {
-                Log.d("SubConfigFetcher", "[$tag] Thử fetch sub_url: $subUrl")
-                val subResp = runCatching {
-                    client.newCall(Request.Builder().url(subUrl).build()).execute()
-                }.getOrNull()
-
-                if (subResp != null && subResp.isSuccessful) {
-                    val subBody = runCatching { subResp.body?.string() }.getOrNull()?.trim()
-
-                    if (!subBody.isNullOrBlank()) {
-                        // Đọc expire từ header Subscription-Userinfo — ưu tiên hơn giá trị admin
-                        val userinfoHeader = subResp.header("subscription-userinfo") ?: ""
-                        val headerExpireTs = Regex("expire=(\\d+)", RegexOption.IGNORE_CASE)
-                            .find(userinfoHeader)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
-
-                        // Ưu tiên: (1) header sub link, (2) expire từ admin API
-                        val finalExpire = if (headerExpireTs > 0L) headerExpireTs else expireArg
-                        val finalSource = if (headerExpireTs > 0L) "sub" else metaSource
-
-                        Log.d("SubConfigFetcher", "[$tag] sub_url fetch OK, body=${subBody.length} chars, expire=$finalExpire (header=$headerExpireTs admin=$expireArg)")
-                        return FetchResult.Success(subBody, subUrl, qrId, finalExpire, finalSource)
-                    }
-                    Log.w("SubConfigFetcher", "[$tag] sub_url trả về body rỗng, fallback sang QR.")
-                } else {
-                    Log.w("SubConfigFetcher", "[$tag] sub_url HTTP ${subResp?.code}, fallback sang QR.")
-                }
-            }
-
-            // ── Bước 3b: Fallback decode ảnh QR ──────────────────────────
+            // ── Bước 3: Decode ảnh QR ─────────────────────────────────────
             val imageUrl = meta.optString("url", "").trim()
             if (imageUrl.isNotBlank()) {
                 Log.d("SubConfigFetcher", "[$tag] Thử download + decode QR từ: $imageUrl")
@@ -159,7 +124,7 @@ object SubConfigFetcher {
 
                 if (!qrContent.isNullOrBlank()) {
                     Log.d("SubConfigFetcher", "[$tag] Decode QR thành công")
-                    return FetchResult.Success(qrContent, "", qrId, expireArg, metaSource)
+                    return FetchResult.Success(qrContent, qrId, expireArg, metaSource)
                 }
                 Log.w("SubConfigFetcher", "[$tag] Decode QR thất bại.")
             }

@@ -58,7 +58,29 @@ fun Context.toastSuccess(message: CharSequence) {
  * @param message The resource ID of the message to show.
  */
 fun Context.toastError(message: Int) {
-    Toasty.error(this, message, Toast.LENGTH_SHORT, true).show()
+    val msg = getString(message)
+    val dp = resources.displayMetrics.density
+    val color = android.graphics.Color.parseColor("#2E7D32")
+    val tv = android.widget.TextView(this).apply {
+        text = msg
+        setTextColor(color)
+        textSize = 14f
+        typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+        val padH = (20 * dp).toInt()
+        val padV = (12 * dp).toInt()
+        setPadding(padH, padV, padH, padV)
+        background = android.graphics.drawable.GradientDrawable().apply {
+            setColor(android.graphics.Color.WHITE)
+            cornerRadius = 999 * dp
+            setStroke(2, color)
+        }
+    }
+    android.widget.Toast(this).apply {
+        duration = Toast.LENGTH_SHORT
+        @Suppress("DEPRECATION")
+        view = tv
+        setGravity(android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL, 0, (80 * dp).toInt())
+    }.show()
 }
 
 /**
@@ -67,7 +89,28 @@ fun Context.toastError(message: Int) {
  * @param message The text of the message to show.
  */
 fun Context.toastError(message: CharSequence) {
-    Toasty.error(this, message, Toast.LENGTH_SHORT, true).show()
+    val dp = resources.displayMetrics.density
+    val color = android.graphics.Color.parseColor("#2E7D32")
+    val tv = android.widget.TextView(this).apply {
+        text = message
+        setTextColor(color)
+        textSize = 14f
+        typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+        val padH = (20 * dp).toInt()
+        val padV = (12 * dp).toInt()
+        setPadding(padH, padV, padH, padV)
+        background = android.graphics.drawable.GradientDrawable().apply {
+            setColor(android.graphics.Color.WHITE)
+            cornerRadius = 999 * dp
+            setStroke(2, color)
+        }
+    }
+    android.widget.Toast(this).apply {
+        duration = Toast.LENGTH_SHORT
+        @Suppress("DEPRECATION")
+        view = tv
+        setGravity(android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL, 0, (80 * dp).toInt())
+    }.show()
 }
 
 const val THRESHOLD = 1000L

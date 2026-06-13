@@ -446,6 +446,8 @@ object V2rayConfigManager {
             rulesetItems?.forEach { key ->
                 getRoutingUserRule(key, v2rayConfig)
             }
+
+
         } catch (e: Exception) {
             Log.e(AppConfig.TAG, "Failed to configure routing", e)
             return false

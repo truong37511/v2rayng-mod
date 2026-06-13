@@ -139,11 +139,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Tự động cập nhật tất cả subscription ngầm khi VPN bật thành công.
-     * Cooldown 30 phút để tránh spam khi VPN reconnect liên tục.
+     * Cooldown 15 phút để tránh spam khi VPN reconnect liên tục.
      * Callback [onSuccess] được gọi trên Main thread khi có ít nhất 1 sub thành công.
      */
     fun autoUpdateSubSilent(onSuccess: () -> Unit) {
-        val cooldownMs = 30 * 60 * 1000L // 30 phút
+        val cooldownMs = 15 * 60 * 1000L // 15 phút
         val lastUpdate = MmkvManager.decodeSettingsLong(AUTO_SUB_UPDATE_LAST_TIME_KEY, 0L)
         val now = System.currentTimeMillis()
 

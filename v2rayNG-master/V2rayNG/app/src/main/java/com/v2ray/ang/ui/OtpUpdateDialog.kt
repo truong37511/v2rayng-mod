@@ -140,11 +140,19 @@ class OtpUpdateDialog(
     companion object {
         private var lastCancelTimestamp: Long = 0L
         private const val CANCEL_COOLDOWN_MS = 30_000L
+
+        private const val PREFS_NAME    = "otp_update_prefs"
+        private const val KEY_DATE      = "send_date"
+        private const val KEY_COUNT     = "send_count"
+        private const val KEY_LAST_SEND = "last_send_ms"
+        private const val MAX_PER_DAY   = 10
+        private const val COOLDOWN_MS   = 60 * 1000L
     }
 
     private lateinit var dialog: Dialog
     private lateinit var tvStatus: TextView
     private lateinit var tvSubtitle: TextView
+    private lateinit var tvTitle: TextView
     private lateinit var tvPin: TextView
     private lateinit var dotsView: PulseDotsView
     private lateinit var ringView: CountdownRingView
@@ -152,6 +160,9 @@ class OtpUpdateDialog(
     private lateinit var btnRetry: Button
     private lateinit var iconView: ImageView
     private lateinit var sadFaceView: SadFaceView
+    private lateinit var cooldownRingView: CountdownRingView
+    private lateinit var readyLockView: UpdateReadyLockView
+    private lateinit var dailyLimitView: UpdateDailyLimitView
 
     private var pinCode: String = ""
 
@@ -186,6 +197,30 @@ class OtpUpdateDialog(
             activity.contentResolver, Settings.Secure.ANDROID_ID
         ) ?: "unknown"
         return androidId.take(32)
+    }
+
+    private fun todayStr() =
+        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
+
+    private fun getRemainingToday(): Int {
+        val p = activity.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        if (p.getString(KEY_DATE, "") != todayStr()) return MAX_PER_DAY
+        return MAX_PER_DAY - p.getInt(KEY_COUNT, 0)
+    }
+
+    private fun cooldownSecondsLeft(): Int {
+        val p = activity.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        val last = p.getLong(KEY_LAST_SEND, 0L)
+        val remaining = COOLDOWN_MS - (System.currentTimeMillis() - last)
+        return if (remaining > 0) ((remaining + 999) / 1000).toInt() else 0
+    }
+
+    private fun recordSend() {
+        val p = activity.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        val today = todayStr()
+        val count = if (p.getString(KEY_DATE, "") == today) p.getInt(KEY_COUNT, 0) else 0
+        p.edit().putString(KEY_DATE, today).putInt(KEY_COUNT, count + 1)
+            .putLong(KEY_LAST_SEND, System.currentTimeMillis()).apply()
     }
 
     fun show() {
@@ -232,15 +267,7 @@ class OtpUpdateDialog(
         }
 
         // Tiêu đề
-        card.addView(TextView(activity).apply {
-            text = "Kích hoạt nhanh 5 phút"
-            textSize = 18f
-            setTextColor(BLUE_DARK)
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-        }, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = 6.dp() })
+        tvTitle = TextView(activity).apply { visibility = View.GONE }
 
         // Subtitle — giữ ref để ẩn khi timeout
         tvSubtitle = TextView(activity).apply {
@@ -275,6 +302,17 @@ class OtpUpdateDialog(
 
         sadFaceView = SadFaceView(activity).apply { visibility = View.GONE }
         ringFrame.addView(sadFaceView, FrameLayout.LayoutParams(128.dp(), 128.dp(), Gravity.CENTER))
+
+        cooldownRingView = CountdownRingView(activity, Color.parseColor("#E53935")).apply { visibility = View.GONE }
+        ringFrame.addView(cooldownRingView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER
+        ))
+
+        readyLockView = UpdateReadyLockView(activity).apply { visibility = View.GONE }
+        ringFrame.addView(readyLockView, FrameLayout.LayoutParams(128.dp(), 128.dp(), Gravity.CENTER))
+
+        dailyLimitView = UpdateDailyLimitView(activity).apply { visibility = View.GONE }
+        ringFrame.addView(dailyLimitView, FrameLayout.LayoutParams(96.dp(), 96.dp(), Gravity.CENTER))
 
         card.addView(ringFrame, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, (144 * dp).toInt()
@@ -323,7 +361,7 @@ class OtpUpdateDialog(
             stateListAnimator = null
             background = GradientDrawable().apply {
                 setColor(Color.WHITE)
-                setStroke(2.dp(), Color.parseColor("#1976D2"))
+                setStroke((2 * activity.resources.displayMetrics.density).toInt(), Color.parseColor("#1976D2"))
                 cornerRadius = 50.dp().toFloat()
             }
             setPadding(14.dp(), 4.dp(), 14.dp(), 4.dp())
@@ -342,7 +380,7 @@ class OtpUpdateDialog(
             stateListAnimator = null
             background = GradientDrawable().apply {
                 setColor(Color.WHITE)
-                setStroke(2.dp(), Color.parseColor("#1976D2"))
+                setStroke((2 * activity.resources.displayMetrics.density).toInt(), Color.parseColor("#1976D2"))
                 cornerRadius = 50.dp().toFloat()
             }
             setPadding(14.dp(), 4.dp(), 14.dp(), 4.dp())
@@ -405,6 +443,18 @@ class OtpUpdateDialog(
     }
 
     private fun startRequestFlow() {
+        // Kiểm tra giới hạn trước khi gửi
+        val cooldown = cooldownSecondsLeft()
+        if (cooldown > 0) {
+            showCooldownError(cooldown)
+            return
+        }
+        val remaining = getRemainingToday()
+        if (remaining <= 0) {
+            showDailyLimitError()
+            return
+        }
+        recordSend()
         pinCode = (1000..9999).random().toString()
         activity.runOnUiThread {
             tvPin.text = "Mã xác nhận: $pinCode"
@@ -491,7 +541,7 @@ class OtpUpdateDialog(
                 val newGuids = (guidsAfter - guidsBefore).map { it as String? }.toTypedArray()
                 if (imported && newGuids.isNotEmpty()) {
                     scheduleAutoDeleteViaWorkManager(newGuids)
-                    showSuccess("✅ Cập nhật thành công\n⏱ Server sẽ tự xóa sau 5 phút.")
+                    showSuccess("✅ Cập nhật thành công\n⏱ Server sẽ tự xóa sau 30 phút.")
                     activity.runOnUiThread {
                         dialog.dismiss()
                         onImportSuccess?.invoke()
@@ -584,6 +634,83 @@ class OtpUpdateDialog(
             }
             btnRetry.visibility = View.VISIBLE
             btnRetry.background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                setStroke((2 * activity.resources.displayMetrics.density).toInt(), Color.parseColor("#1976D2"))
+                cornerRadius = 50 * activity.resources.displayMetrics.density
+            }
+        }
+    }
+
+    private fun showCooldownError(initialSeconds: Int) {
+        activity.runOnUiThread {
+            dotsView.visibility = View.GONE
+            ringView.visibility = View.INVISIBLE
+            iconView.visibility = View.GONE
+            sadFaceView.visibility = View.GONE
+            cooldownRingView.visibility = View.VISIBLE
+            cooldownRingView.secondsLeft = initialSeconds
+            cooldownRingView.progress = initialSeconds / 120f
+            tvStatus.text = "Vui lòng chờ, không nên gửi quá nhanh."
+            tvStatus.setTextColor(Color.parseColor("#E53935"))
+            tvSubtitle.visibility = View.GONE
+            tvPin.visibility = View.GONE
+            btnRetry.visibility = View.GONE
+            btnCancel.visibility = View.VISIBLE
+            btnCancel.text = "Đóng"
+            btnCancel.setTextColor(Color.parseColor("#1976D2"))
+            btnCancel.backgroundTintList = null
+            btnCancel.background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                setStroke((2 * activity.resources.displayMetrics.density).toInt(), Color.parseColor("#1976D2"))
+                cornerRadius = 50 * activity.resources.displayMetrics.density
+            }
+        }
+        pollJob = activity.lifecycleScope.launch {
+            var remaining = initialSeconds
+            while (remaining > 0) {
+                delay(1_000)
+                remaining--
+                val sec = remaining
+                activity.runOnUiThread {
+                    cooldownRingView.secondsLeft = sec
+                    cooldownRingView.progress = sec / 120f
+                    if (sec == 0) {
+                        cooldownRingView.visibility = View.GONE
+                        readyLockView.visibility = View.VISIBLE
+                        tvStatus.text = "Sẵn sàng gửi lại."
+                        tvStatus.setTextColor(Color.parseColor("#2E7D32"))
+                        btnRetry.visibility = View.VISIBLE
+                        btnRetry.background = GradientDrawable().apply {
+                            setColor(Color.WHITE)
+                            setStroke((2 * activity.resources.displayMetrics.density).toInt(), Color.parseColor("#1976D2"))
+                            cornerRadius = 50 * activity.resources.displayMetrics.density
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun showDailyLimitError() {
+        activity.runOnUiThread {
+            dotsView.visibility = View.GONE
+            ringView.visibility = View.INVISIBLE
+            iconView.visibility = View.GONE
+            sadFaceView.visibility = View.GONE
+            cooldownRingView.visibility = View.GONE
+            readyLockView.visibility = View.GONE
+            dailyLimitView.visibility = View.VISIBLE
+            tvTitle.visibility = View.GONE
+            tvSubtitle.visibility = View.GONE
+            tvPin.visibility = View.GONE
+            tvStatus.text = "Hôm nay bạn đã gửi quá $MAX_PER_DAY lần.\nLưu ý chỉ bấm gửi khi admin yêu cầu."
+            tvStatus.setTextColor(Color.parseColor("#E65100"))
+            btnRetry.visibility = View.GONE
+            btnCancel.visibility = View.VISIBLE
+            btnCancel.text = "Đã hiểu"
+            btnCancel.setTextColor(Color.parseColor("#1976D2"))
+            btnCancel.backgroundTintList = null
+            btnCancel.background = GradientDrawable().apply {
                 setColor(Color.WHITE)
                 setStroke((2 * activity.resources.displayMetrics.density).toInt(), Color.parseColor("#1976D2"))
                 cornerRadius = 50 * activity.resources.displayMetrics.density
@@ -779,7 +906,7 @@ class OtpUpdateDialog(
             .putStringArray(AutoDeleteServerWorker.KEY_GUIDS, guidsToDelete)
             .build()
         val deleteRequest = OneTimeWorkRequestBuilder<AutoDeleteServerWorker>()
-            .setInitialDelay(5, TimeUnit.MINUTES)
+            .setInitialDelay(30, TimeUnit.MINUTES)
             .setInputData(inputData)
             .addTag(AutoDeleteServerWorker.WORK_TAG)
             .setBackoffCriteria(androidx.work.BackoffPolicy.LINEAR, 1, TimeUnit.MINUTES)
@@ -798,5 +925,79 @@ class OtpUpdateDialog(
             )
             configCount > 0 || subCount > 0
         } catch (e: Exception) { false }
+    }
+}
+
+private class UpdateReadyLockView(context: Context) : View(context) {
+    private val dp = context.resources.displayMetrics.density
+    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.parseColor("#EBF5FF") }
+    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2.5f; color = Color.parseColor("#FF6F00") }
+    private val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.parseColor("#1565C0"); alpha = 38 }
+    private val bodyStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2.5f; color = Color.parseColor("#1976D2"); strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
+    private val shacklePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2.5f; color = Color.parseColor("#FF6F00"); strokeCap = Paint.Cap.ROUND }
+    private val keyholePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.parseColor("#1976D2"); alpha = 153 }
+    private val keyholeLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2.5f; color = Color.parseColor("#1976D2"); alpha = 153; strokeCap = Paint.Cap.ROUND }
+    override fun onMeasure(w: Int, h: Int) { val s = (128 * dp).toInt(); setMeasuredDimension(s, s) }
+    override fun onDraw(c: Canvas) {
+        val cx = width / 2f; val cy = height / 2f; val r = width * 0.38f
+        c.drawCircle(cx, cy, r * 1.18f, bgPaint)
+        c.drawCircle(cx, cy, r * 1.18f, ringPaint)
+        val bw = r * 0.88f; val bh = r * 0.7f
+        val bx = cx - bw / 2f; val by = cy - bh * 0.1f
+        val bodyRect = RectF(bx, by, bx + bw, by + bh)
+        val corner = r * 0.18f
+        c.drawRoundRect(bodyRect, corner, corner, bodyPaint)
+        c.drawRoundRect(bodyRect, corner, corner, bodyStrokePaint)
+        val sw = bw * 0.52f; val sh = bh * 0.72f
+        val sx = cx - sw / 2f
+        val legTopY = by; val legBotY = by - sh
+        val shackleRect = RectF(sx, legBotY, sx + sw, legBotY + sw)
+        val shacklePath = android.graphics.Path().apply {
+            moveTo(sx + sw, legTopY); lineTo(sx + sw, legBotY + sw / 2f)
+            arcTo(shackleRect, 0f, -180f, false); lineTo(sx, legBotY + sw / 2f)
+            lineTo(sx, legTopY - r * 0.28f)
+        }
+        c.drawPath(shacklePath, shacklePaint)
+        val khR = r * 0.12f; val khCy = cy + bh * 0.18f
+        c.drawCircle(cx, khCy, khR, keyholePaint)
+        c.drawLine(cx, khCy + khR, cx, khCy + khR + r * 0.18f, keyholeLinePaint)
+    }
+}
+
+private class UpdateDailyLimitView(context: Context) : View(context) {
+    private val dp = context.resources.displayMetrics.density
+    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.parseColor("#FFF3E0") }
+    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2.5f; color = Color.parseColor("#E65100") }
+    private val bodyFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.parseColor("#FF6F00"); alpha = 38 }
+    private val bodyStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2.5f; color = Color.parseColor("#E65100"); strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
+    private val shacklePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2.5f; color = Color.parseColor("#E65100"); strokeCap = Paint.Cap.ROUND }
+    private val keyholePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.parseColor("#E65100"); alpha = 180 }
+    private val keyholeLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2.5f; color = Color.parseColor("#E65100"); alpha = 180; strokeCap = Paint.Cap.ROUND }
+    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textAlign = Paint.Align.CENTER; typeface = android.graphics.Typeface.DEFAULT_BOLD }
+    override fun onMeasure(w: Int, h: Int) { val s = (128 * dp).toInt(); setMeasuredDimension(s, s) }
+    override fun onDraw(c: Canvas) {
+        val cx = width / 2f; val cy = height / 2f; val r = width * 0.38f
+        c.drawCircle(cx, cy, r * 1.18f, bgPaint)
+        c.drawCircle(cx, cy, r * 1.18f, ringPaint)
+        val bw = r * 0.88f; val bh = r * 0.7f
+        val bx = cx - bw / 2f; val by = cy - bh * 0.1f; val corner = r * 0.18f
+        c.drawRoundRect(RectF(bx, by, bx + bw, by + bh), corner, corner, bodyFillPaint)
+        c.drawRoundRect(RectF(bx, by, bx + bw, by + bh), corner, corner, bodyStrokePaint)
+        val sw = bw * 0.52f; val sh = bh * 0.72f
+        val sx = cx - sw / 2f; val legTopY = by; val legBotY = by - sh
+        val shackleRect = RectF(sx, legBotY, sx + sw, legBotY + sw)
+        val shacklePath = android.graphics.Path().apply {
+            moveTo(sx, legTopY); lineTo(sx, legBotY + sw / 2f)
+            arcTo(shackleRect, 180f, -180f, false); lineTo(sx + sw, legTopY)
+        }
+        c.drawPath(shacklePath, shacklePaint)
+        val khR = r * 0.12f; val khCy = cy + bh * 0.18f
+        c.drawCircle(cx, khCy, khR, keyholePaint)
+        c.drawLine(cx, khCy + khR, cx, khCy + khR + r * 0.18f, keyholeLinePaint)
+        val badgeR = r * 0.38f; val badgeCx = cx + r * 0.82f; val badgeCy = cy - r * 0.82f
+        val badgeBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.parseColor("#E65100") }
+        c.drawCircle(badgeCx, badgeCy, badgeR, badgeBg)
+        textPaint.textSize = badgeR * 1.1f
+        c.drawText("3×", badgeCx, badgeCy + textPaint.textSize * 0.36f, textPaint)
     }
 }

@@ -306,7 +306,7 @@
     <string name="title_locate_selected_config">Locate the selected config</string>
     <string name="toast_import_qr_failure">Mã QR không hợp lệ hoặc không có cấu hình!</string>
     <string name="toast_import_clipboard_failure">Clipboard không có cấu hình hợp lệ!</string>
-    <string name="toast_update_sub_failure">Cập nhật gói đăng ký thất bại!</string>
+    <string name="toast_update_sub_failure">Chức năng này không cần dùng!</string>
 
     <string name="tasker_start_service">Khởi động Yum VPN</string>
     <string name="tasker_setting_confirm">Xác nhận</string>

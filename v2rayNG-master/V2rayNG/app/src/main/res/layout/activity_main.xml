@@ -107,7 +107,7 @@
                         android:paddingStart="12dp"
                         android:paddingEnd="12dp"
                         android:gravity="center_vertical"
-                        android:textSize="15sp"
+                        android:textSize="13sp"
                         android:textStyle="normal"
                         android:fontFamily="sans-serif-medium"
                         android:textColor="#FFFFFF"

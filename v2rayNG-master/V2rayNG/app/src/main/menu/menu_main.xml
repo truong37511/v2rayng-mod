@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <item
+        android:id="@+id/search_view"
+        android:icon="@drawable/ic_outline_filter_alt_24"
+        android:title="@string/menu_item_search"
+        android:visible="false"
+        app:actionViewClass="androidx.appcompat.widget.SearchView"
+        app:showAsAction="always|collapseActionView" />
+
+    <!-- ===== NHÓM THÊM / KÍCH HOẠT ===== -->
+    <item
+        android:id="@+id/import_shop_otp"
+        android:title="Kích hoạt đại lý"
+        android:icon="@drawable/ic_admin"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/import_qrcode"
+        android:title="Quét mã QR"
+        android:icon="@drawable/ic_qr_code"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/import_clipboard"
+        android:title="Dán từ clipboard"
+        android:icon="@drawable/ic_clipboard"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/import_qr_otp"
+        android:title="Kích hoạt nhanh"
+        android:icon="@drawable/ic_action_done"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/import_year_otp"
+        android:title="Kích hoạt 1 năm"
+        android:icon="@drawable/ic_lock_24dp"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/import_local"
+        android:title="@string/menu_item_import_config_local"
+        android:icon="@drawable/ic_file_24dp"
+        android:visible="false"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/import_manually_policy_group"
+        android:title="@string/menu_item_import_config_policy_group"
+        android:icon="@drawable/ic_routing_24dp"
+        android:visible="false"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/import_manually_vmess"
+        android:title="@string/menu_item_import_config_manually_vmess"
+        android:icon="@drawable/ic_add_24dp"
+        android:visible="false"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/import_manually_vless"
+        android:title="@string/menu_item_import_config_manually_vless"
+        android:icon="@drawable/ic_add_24dp"
+        android:visible="false"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/import_manually_ss"
+        android:title="@string/menu_item_import_config_manually_ss"
+        android:icon="@drawable/ic_add_24dp"
+        android:visible="false"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/import_manually_socks"
+        android:title="@string/menu_item_import_config_manually_socks"
+        android:icon="@drawable/ic_add_24dp"
+        android:visible="false"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/import_manually_http"
+        android:title="@string/menu_item_import_config_manually_http"
+        android:icon="@drawable/ic_add_24dp"
+        android:visible="false"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/import_manually_trojan"
+        android:title="@string/menu_item_import_config_manually_trojan"
+        android:icon="@drawable/ic_add_24dp"
+        android:visible="false"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/import_manually_wireguard"
+        android:title="@string/menu_item_import_config_manually_wireguard"
+        android:icon="@drawable/ic_add_24dp"
+        android:visible="false"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/import_manually_hysteria2"
+        android:title="@string/menu_item_import_config_manually_hysteria2"
+        android:icon="@drawable/ic_add_24dp"
+        android:visible="false"
+        app:showAsAction="never" />
+
+    <!-- ===== CÁC MỤC GỐC CỦA MENU 3 CHẤM ===== -->
+    <item
+        android:id="@+id/service_restart"
+        android:title="@string/title_service_restart"
+        android:icon="@drawable/ic_restore_24dp"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/del_all_config"
+        android:title="@string/title_del_all_config"
+        android:icon="@drawable/ic_delete_24dp"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/del_duplicate_config"
+        android:icon="@drawable/ic_delete_24dp"
+        android:title="@string/title_del_duplicate_config"
+        android:visible="false"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/del_invalid_config"
+        android:icon="@drawable/ic_delete_24dp"
+        android:title="@string/title_del_invalid_config"
+        android:visible="false"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/export_all"
+        android:icon="@drawable/ic_share_24dp"
+        android:title="@string/title_export_all"
+        android:visible="false"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/ping_all"
+        android:title="@string/title_ping_all_server"
+        android:icon="@drawable/ic_feedback_24dp"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/real_ping_all"
+        android:title="@string/title_real_ping_all_server"
+        android:icon="@drawable/ic_description_24dp"
+        android:visible="false"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/sort_by_test_results"
+        android:title="@string/title_sort_by_test_results"
+        android:icon="@drawable/ic_share_24dp"
+        android:visible="false"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/locate_selected_config"
+        android:title="@string/title_locate_selected_config"
+        android:icon="@drawable/ic_per_apps_24dp"
+        android:visible="false"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/sub_update"
+        android:title="@string/title_sub_update"
+        android:icon="@drawable/ic_subscriptions_24dp"
+        app:showAsAction="never" />
+</menu>

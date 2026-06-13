@@ -70,6 +70,9 @@ class TProxyService(
             appendLine("socks5:")
             appendLine("  port: ${socksPort}")
             appendLine("  address: ${AppConfig.LOOPBACK}")
+            // Giữ 'udp' để hev-tunnel dùng SOCKS5 UDP Associate đúng chuẩn.
+            // Việc block QUIC (UDP 443) được xử lý ở tầng routing của xray core
+            // trong V2rayConfigManager.getRouting() → TikTok sẽ fallback về TCP/TLS.
             appendLine("  udp: 'udp'")
 
             // Read-write timeout settings

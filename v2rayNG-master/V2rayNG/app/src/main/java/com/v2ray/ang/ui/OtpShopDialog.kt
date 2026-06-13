@@ -109,12 +109,16 @@ class OtpShopDialog(
     private lateinit var tvStatus: TextView
     private lateinit var dotsView: ShopPulseDotsView
     private lateinit var ringView: ShopCountdownRingView
+    private lateinit var tvTitle: TextView
     private lateinit var tvSubtitle: TextView
     private lateinit var tvPin: TextView
     private lateinit var btnCancel: Button
     private lateinit var btnRetry: Button
     private lateinit var iconView: ImageView
     private lateinit var sadFaceView: ShopSadFaceView
+    private lateinit var cooldownRingView: ShopCountdownRingView
+    private lateinit var readyLockView: ShopReadyLockView
+    private lateinit var dailyLimitView: ShopDailyLimitView
 
     private var pinCode: String = ""
 
@@ -139,6 +143,39 @@ class OtpShopDialog(
 
     private fun getDeviceId(): String =
         (Settings.Secure.getString(activity.contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown").take(32)
+
+    companion object {
+        private const val PREFS_NAME    = "otp_shop_prefs"
+        private const val KEY_DATE      = "send_date"
+        private const val KEY_COUNT     = "send_count"
+        private const val KEY_LAST_SEND = "last_send_ms"
+        private const val MAX_PER_DAY   = 10
+        private const val COOLDOWN_MS   = 60 * 1000L
+    }
+
+    private fun todayStr() =
+        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
+
+    private fun getRemainingToday(): Int {
+        val p = activity.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        if (p.getString(KEY_DATE, "") != todayStr()) return MAX_PER_DAY
+        return MAX_PER_DAY - p.getInt(KEY_COUNT, 0)
+    }
+
+    private fun cooldownSecondsLeft(): Int {
+        val p = activity.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        val last = p.getLong(KEY_LAST_SEND, 0L)
+        val remaining = COOLDOWN_MS - (System.currentTimeMillis() - last)
+        return if (remaining > 0) ((remaining + 999) / 1000).toInt() else 0
+    }
+
+    private fun recordSend() {
+        val p = activity.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        val today = todayStr()
+        val count = if (p.getString(KEY_DATE, "") == today) p.getInt(KEY_COUNT, 0) else 0
+        p.edit().putString(KEY_DATE, today).putInt(KEY_COUNT, count + 1)
+            .putLong(KEY_LAST_SEND, System.currentTimeMillis()).apply()
+    }
 
     fun show() {
         dialog = Dialog(activity, android.R.style.Theme_Translucent_NoTitleBar)
@@ -175,11 +212,7 @@ class OtpShopDialog(
             background = GradientDrawable().apply { setColor(Color.WHITE); cornerRadius = 28.dp().toFloat() }
         }
 
-        card.addView(TextView(activity).apply {
-            text = "Kích hoạt đại lý"; textSize = 18f; setTextColor(BLUE_DARK)
-            typeface = Typeface.DEFAULT_BOLD; gravity = Gravity.CENTER
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            .apply { bottomMargin = 6.dp() })
+        tvTitle = TextView(activity).apply { visibility = View.GONE }
 
         tvSubtitle = TextView(activity).apply {
             text = "Đang gửi yêu cầu đến admin..."; textSize = 13f
@@ -205,6 +238,17 @@ class OtpShopDialog(
 
         sadFaceView = ShopSadFaceView(activity).apply { visibility = View.GONE }
         ringFrame.addView(sadFaceView, FrameLayout.LayoutParams(128.dp(), 128.dp(), Gravity.CENTER))
+
+        cooldownRingView = ShopCountdownRingView(activity, Color.parseColor("#E53935")).apply { visibility = View.GONE }
+        ringFrame.addView(cooldownRingView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER
+        ))
+
+        readyLockView = ShopReadyLockView(activity).apply { visibility = View.GONE }
+        ringFrame.addView(readyLockView, FrameLayout.LayoutParams(128.dp(), 128.dp(), Gravity.CENTER))
+
+        dailyLimitView = ShopDailyLimitView(activity).apply { visibility = View.GONE }
+        ringFrame.addView(dailyLimitView, FrameLayout.LayoutParams(96.dp(), 96.dp(), Gravity.CENTER))
 
         card.addView(ringFrame, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (144 * dp).toInt()).apply { bottomMargin = 14.dp() })
 
@@ -237,7 +281,7 @@ class OtpShopDialog(
             backgroundTintList = null; stateListAnimator = null
             background = GradientDrawable().apply {
                 setColor(Color.WHITE)
-                setStroke(2.dp(), Color.parseColor("#1976D2"))
+                setStroke((2 * activity.resources.displayMetrics.density).toInt(), Color.parseColor("#1976D2"))
                 cornerRadius = 50.dp().toFloat()
             }
             setPadding(14.dp(), 4.dp(), 14.dp(), 4.dp())
@@ -253,7 +297,7 @@ class OtpShopDialog(
             backgroundTintList = null; stateListAnimator = null
             background = GradientDrawable().apply {
                 setColor(Color.WHITE)
-                setStroke(2.dp(), Color.parseColor("#1976D2"))
+                setStroke((2 * activity.resources.displayMetrics.density).toInt(), Color.parseColor("#1976D2"))
                 cornerRadius = 50.dp().toFloat()
             }
             setPadding(14.dp(), 4.dp(), 14.dp(), 4.dp())
@@ -310,6 +354,17 @@ class OtpShopDialog(
     }
 
     private fun startRequestFlow() {
+        val cooldown = cooldownSecondsLeft()
+        if (cooldown > 0) {
+            showCooldownError(cooldown)
+            return
+        }
+        val remaining = getRemainingToday()
+        if (remaining <= 0) {
+            showDailyLimitError()
+            return
+        }
+        recordSend()
         pinCode = (1000..9999).random().toString()
         activity.runOnUiThread { tvPin.text = "Mã xác nhận: $pinCode" }
         pollJob = activity.lifecycleScope.launch {
@@ -348,7 +403,7 @@ class OtpShopDialog(
     private suspend fun fetchSubConfig() {
         when (val result = SubConfigFetcher.fetchSubConfig()) {
             is SubConfigFetcher.FetchResult.Success -> {
-                val imported = withContext(Dispatchers.IO) { tryImportSubContent(result.subUrl, result.subContent) }
+                val imported = withContext(Dispatchers.IO) { tryImportSubContent(result.subContent) }
                 if (imported) { showSuccess("✅ Kích hoạt đại lý thành công!"); activity.runOnUiThread { dialog.dismiss(); onImportSuccess?.invoke() } }
                 else showError("Gói đại lý đã có trên thiết bị.\nKhông cần kích hoạt lại.")
             }
@@ -356,11 +411,10 @@ class OtpShopDialog(
         }
     }
 
-    private fun tryImportSubContent(subUrl: String, subContent: String): Boolean {
+    private fun tryImportSubContent(subContent: String): Boolean {
         return try {
-            val input = if (subUrl.isNotBlank()) subUrl else subContent.trim()
-            android.util.Log.d("OtpShopDialog", "tryImportSubContent: dùng ${if (subUrl.isNotBlank()) "subUrl" else "base64"}")
-            val (configCount, subCount) = com.v2ray.ang.handler.AngConfigManager.importBatchConfig(input, "", false)
+            android.util.Log.d("OtpShopDialog", "tryImportSubContent: dùng QR content")
+            val (configCount, subCount) = com.v2ray.ang.handler.AngConfigManager.importBatchConfig(subContent.trim(), "", false)
             android.util.Log.d("OtpShopDialog", "importBatchConfig: configs=$configCount subs=$subCount")
             configCount > 0 || subCount > 0
         } catch (e: Exception) { android.util.Log.e("OtpShopDialog", "exception", e); false }
@@ -434,6 +488,79 @@ class OtpShopDialog(
             }
             btnRetry.visibility = View.VISIBLE
             btnRetry.background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                setStroke((2 * activity.resources.displayMetrics.density).toInt(), Color.parseColor("#1976D2"))
+                cornerRadius = 50 * activity.resources.displayMetrics.density
+            }
+        }
+    }
+
+    private fun showCooldownError(initialSeconds: Int) {
+        activity.runOnUiThread {
+            dotsView.visibility = View.GONE; ringView.visibility = View.INVISIBLE
+            iconView.visibility = View.GONE; sadFaceView.visibility = View.GONE
+            cooldownRingView.visibility = View.VISIBLE
+            cooldownRingView.secondsLeft = initialSeconds
+            cooldownRingView.progress = initialSeconds / 120f
+            tvStatus.text = "Vui lòng chờ, không nên gửi quá nhanh."
+            tvStatus.setTextColor(Color.parseColor("#E53935"))
+            tvSubtitle.visibility = View.GONE
+            tvPin.visibility = View.GONE
+            btnRetry.visibility = View.GONE
+            btnCancel.visibility = View.VISIBLE; btnCancel.text = "Đóng"
+            btnCancel.setTextColor(Color.parseColor("#1976D2"))
+            btnCancel.backgroundTintList = null
+            btnCancel.background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                setStroke(2, Color.parseColor("#1976D2"))
+                cornerRadius = 50 * activity.resources.displayMetrics.density
+            }
+        }
+        pollJob = activity.lifecycleScope.launch {
+            var remaining = initialSeconds
+            while (remaining > 0) {
+                delay(1_000); remaining--
+                val sec = remaining
+                activity.runOnUiThread {
+                    cooldownRingView.secondsLeft = sec
+                    cooldownRingView.progress = sec / 120f
+                    if (sec == 0) {
+                        cooldownRingView.visibility = View.GONE
+                        readyLockView.visibility = View.VISIBLE
+                        tvStatus.text = "Sẵn sàng gửi lại."
+                        tvStatus.setTextColor(Color.parseColor("#2E7D32"))
+                        btnRetry.visibility = View.VISIBLE
+                        btnRetry.background = GradientDrawable().apply {
+                            setColor(Color.WHITE)
+                            setStroke((2 * activity.resources.displayMetrics.density).toInt(), Color.parseColor("#1976D2"))
+                            cornerRadius = 50 * activity.resources.displayMetrics.density
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun showDailyLimitError() {
+        activity.runOnUiThread {
+            dotsView.visibility = View.GONE
+            ringView.visibility = View.INVISIBLE
+            iconView.visibility = View.GONE
+            sadFaceView.visibility = View.GONE
+            cooldownRingView.visibility = View.GONE
+            readyLockView.visibility = View.GONE
+            dailyLimitView.visibility = View.VISIBLE
+            tvTitle.visibility = View.GONE
+            tvSubtitle.visibility = View.GONE
+            tvPin.visibility = View.GONE
+            tvStatus.text = "Hôm nay bạn đã gửi quá $MAX_PER_DAY lần.\nLưu ý chỉ bấm gửi khi admin yêu cầu."
+            tvStatus.setTextColor(Color.parseColor("#E65100"))
+            btnRetry.visibility = View.GONE
+            btnCancel.visibility = View.VISIBLE
+            btnCancel.text = "Đã hiểu"
+            btnCancel.setTextColor(Color.parseColor("#1976D2"))
+            btnCancel.backgroundTintList = null
+            btnCancel.background = GradientDrawable().apply {
                 setColor(Color.WHITE)
                 setStroke((2 * activity.resources.displayMetrics.density).toInt(), Color.parseColor("#1976D2"))
                 cornerRadius = 50 * activity.resources.displayMetrics.density
@@ -585,5 +712,133 @@ class OtpShopDialog(
                 c.drawOval(android.graphics.RectF(txR - 1.5f * dp, ty - 2.5f * dp, txR + 1.5f * dp, ty + 2.5f * dp), tearPaint)
             }
         }
+    }
+}
+
+private class ShopReadyLockView(context: Context) : View(context) {
+    private val dp = context.resources.displayMetrics.density
+    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.parseColor("#EBF5FF")
+    }
+    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f
+        color = Color.parseColor("#FF6F00")
+    }
+    private val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.parseColor("#1565C0")
+        alpha = 38
+    }
+    private val bodyStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f
+        color = Color.parseColor("#1976D2")
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    private val shacklePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f
+        color = Color.parseColor("#FF6F00")
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val keyholePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.parseColor("#1976D2")
+        alpha = 153
+    }
+    private val keyholeLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f
+        color = Color.parseColor("#1976D2")
+        alpha = 153
+        strokeCap = Paint.Cap.ROUND
+    }
+
+    override fun onMeasure(w: Int, h: Int) {
+        val s = (128 * dp).toInt(); setMeasuredDimension(s, s)
+    }
+
+    override fun onDraw(c: Canvas) {
+        val cx = width / 2f; val cy = height / 2f; val r = width * 0.38f
+
+        // Background circle
+        c.drawCircle(cx, cy, r * 1.18f, bgPaint)
+
+        // Outer orange ring
+        c.drawCircle(cx, cy, r * 1.18f, ringPaint)
+
+        // Lock body (rounded rect, centered)
+        val bw = r * 0.88f; val bh = r * 0.7f
+        val bx = cx - bw / 2f; val by = cy - bh * 0.1f
+        val bodyRect = RectF(bx, by, bx + bw, by + bh)
+        val corner = r * 0.18f
+        c.drawRoundRect(bodyRect, corner, corner, bodyPaint)
+        c.drawRoundRect(bodyRect, corner, corner, bodyStrokePaint)
+
+        // Shackle (open — left side up, right side down into body)
+        val sw = bw * 0.52f; val sh = bh * 0.72f
+        val sx = cx - sw / 2f
+        // Right leg goes into body top
+        val legTopY = by
+        val legBotY = by - sh
+        // Arc top
+        val shackleRect = RectF(sx, legBotY, sx + sw, legBotY + sw)
+        val shacklePath = android.graphics.Path().apply {
+            moveTo(sx + sw, legTopY)
+            lineTo(sx + sw, legBotY + sw / 2f)
+            arcTo(shackleRect, 0f, -180f, false)
+            lineTo(sx, legBotY + sw / 2f)
+            // Left leg lifted up (open shackle: left side pulled out)
+            lineTo(sx, legTopY - r * 0.28f)
+        }
+        c.drawPath(shacklePath, shacklePaint)
+
+        // Keyhole circle
+        val khR = r * 0.12f
+        val khCy = cy + bh * 0.18f
+        c.drawCircle(cx, khCy, khR, keyholePaint)
+        // Keyhole line down
+        c.drawLine(cx, khCy + khR, cx, khCy + khR + r * 0.18f, keyholeLinePaint)
+    }
+}
+
+private class ShopDailyLimitView(context: Context) : View(context) {
+    private val dp = context.resources.displayMetrics.density
+    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.parseColor("#FFF3E0") }
+    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2.5f; color = Color.parseColor("#E65100") }
+    private val bodyFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.parseColor("#FF6F00"); alpha = 38 }
+    private val bodyStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2.5f; color = Color.parseColor("#E65100"); strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
+    private val shacklePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2.5f; color = Color.parseColor("#E65100"); strokeCap = Paint.Cap.ROUND }
+    private val keyholePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.parseColor("#E65100"); alpha = 180 }
+    private val keyholeLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2.5f; color = Color.parseColor("#E65100"); alpha = 180; strokeCap = Paint.Cap.ROUND }
+    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textAlign = Paint.Align.CENTER; typeface = android.graphics.Typeface.DEFAULT_BOLD }
+    override fun onMeasure(w: Int, h: Int) { val s = (128 * dp).toInt(); setMeasuredDimension(s, s) }
+    override fun onDraw(c: Canvas) {
+        val cx = width / 2f; val cy = height / 2f; val r = width * 0.38f
+        c.drawCircle(cx, cy, r * 1.18f, bgPaint)
+        c.drawCircle(cx, cy, r * 1.18f, ringPaint)
+        val bw = r * 0.88f; val bh = r * 0.7f
+        val bx = cx - bw / 2f; val by = cy - bh * 0.1f; val corner = r * 0.18f
+        c.drawRoundRect(RectF(bx, by, bx + bw, by + bh), corner, corner, bodyFillPaint)
+        c.drawRoundRect(RectF(bx, by, bx + bw, by + bh), corner, corner, bodyStrokePaint)
+        val sw = bw * 0.52f; val sh = bh * 0.72f
+        val sx = cx - sw / 2f; val legTopY = by; val legBotY = by - sh
+        val shackleRect = RectF(sx, legBotY, sx + sw, legBotY + sw)
+        val shacklePath = android.graphics.Path().apply {
+            moveTo(sx, legTopY); lineTo(sx, legBotY + sw / 2f)
+            arcTo(shackleRect, 180f, -180f, false); lineTo(sx + sw, legTopY)
+        }
+        c.drawPath(shacklePath, shacklePaint)
+        val khR = r * 0.12f; val khCy = cy + bh * 0.18f
+        c.drawCircle(cx, khCy, khR, keyholePaint)
+        c.drawLine(cx, khCy + khR, cx, khCy + khR + r * 0.18f, keyholeLinePaint)
+        val badgeR = r * 0.38f; val badgeCx = cx + r * 0.82f; val badgeCy = cy - r * 0.82f
+        val badgeBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.parseColor("#E65100") }
+        c.drawCircle(badgeCx, badgeCy, badgeR, badgeBg)
+        textPaint.textSize = badgeR * 1.1f
+        c.drawText("3×", badgeCx, badgeCy + textPaint.textSize * 0.36f, textPaint)
     }
 }

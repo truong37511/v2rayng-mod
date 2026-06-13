@@ -44,6 +44,8 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
     private var tabMediator: TabLayoutMediator? = null
     private var isFabAnimating = false
     private var fabSpinJob: kotlinx.coroutines.Job? = null
+    private var restartJob: kotlinx.coroutines.Job? = null
+
 
     private val requestVpnPermission =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -91,6 +93,27 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         }
     }
 
+    /**
+     * Gọi từ TiktokDownloadDialog / TiktokPluginDownloadDialog sau khi tải xong.
+     * Kiểm tra quyền cài APK — nếu chưa có thì bắt buộc user cấp quyền (loop không thoát được).
+     */
+    fun installApk(uri: Uri) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O
+            && !packageManager.canRequestPackageInstalls()
+        ) {
+            pendingInstallUri = uri
+            requestInstallPermission.launch(
+                Intent(
+                    android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName")
+                )
+            )
+        } else {
+            pendingInstallUri = null
+            launchInstaller(uri)
+        }
+    }
+
     // ✅ Dialog hỏi lại khi user chưa cấp quyền (thay vì toast lỗi)
     private fun showRetryPermissionDialog(uri: Uri) {
         val dp = resources.displayMetrics.density
@@ -126,10 +149,11 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
 
     fun restartV2Ray() {
+        restartJob?.cancel()
         if (mainViewModel.isRunning.value == true) {
             V2RayServiceManager.stopVService(this)
         }
-        lifecycleScope.launch {
+        restartJob = lifecycleScope.launch {
             delay(500)
             startV2Ray()
         }
@@ -273,14 +297,25 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
         // ✅ Fetch thông báo từ web admin
         fetchAnnouncement()
+        // ✅ Fetch thông báo riêng cho 2 item drawer: TikTok + VPN
 
-        // ✅ Nếu đang chờ cài APK mà user chưa cấp quyền → hiện lại dialog bắt buộc
+        // ✅ Reset FAB lock phòng trường hợp bị treo do animation interrupt
+        isFabAnimating = false
+        binding.fab.isEnabled = true
+
+        // ✅ Nếu đang chờ cài APK → kiểm tra quyền và xử lý
         val uri = pendingInstallUri
-        if (uri != null &&
-            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
-            !packageManager.canRequestPackageInstalls()
-        ) {
-            showRetryPermissionDialog(uri)
+        if (uri != null) {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O
+                && !packageManager.canRequestPackageInstalls()
+            ) {
+                // Chưa có quyền → hiện dialog bắt buộc cấp quyền
+                showRetryPermissionDialog(uri)
+            } else {
+                // Đã có quyền rồi → cài luôn và xóa pending để không lặp lại
+                pendingInstallUri = null
+                launchInstaller(uri)
+            }
         }
     }
 
@@ -302,6 +337,9 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         // ✅ Dừng vòng xoay FAB nếu đang chạy
         fabSpinJob?.cancel()
         fabSpinJob = null
+        // ✅ Hủy restart job nếu đang chờ
+        restartJob?.cancel()
+        restartJob = null
     }
 
     override fun onPause() {
@@ -346,22 +384,6 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
                 binding.tvTestState.text = getString(R.string.connection_test_testing)
                 mainViewModel.testCurrentServerRealPing()
 
-                // ✅ Auto update subscription ngầm sau khi VPN kết nối thành công (cooldown 30 phút)
-                val nowMs = System.currentTimeMillis()
-                if (nowMs - lastAutoUpdateMs >= AUTO_UPDATE_COOLDOWN_MS) {
-                    lastAutoUpdateMs = nowMs
-                    mainViewModel.autoUpdateSubSilent {
-                        setupGroupTab()
-                        refreshExpireBanner()
-                        // ✅ Chỉ hiện toast khi không có dialog kết nối đang mở
-                        if (!VpnConnectingDialog.isShowing()) {
-                            showCustomToast("✅ Cập nhật máy chủ thành công!", "#2E7D32")
-                        }
-                        // ✅ Fetch thông báo mới từ web admin sau khi update sub xong
-                        fetchAnnouncement()
-                    }
-                }
-
                 // ✅ Bắt đầu kiểm tra hết hạn app định kỳ khi VPN bật
                 startAppExpireWatchJob()
             }
@@ -375,9 +397,21 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         }
 
         // Observe kết quả kiểm tra kết nối → hiện lên thanh dưới cùng
+        // ✅ Ping thành công (có "ms") → mới gọi auto update subscription
+        // ✅ Ping lỗi → im lặng, không update
         mainViewModel.updateTestResultAction.observe(this) { result ->
             if (!result.isNullOrEmpty()) {
                 binding.tvTestState.text = result
+            }
+            if (!result.isNullOrEmpty() && result.contains("ms") && mainViewModel.isRunning.value == true) {
+                mainViewModel.autoUpdateSubSilent {
+                    setupGroupTab()
+                    refreshExpireBanner()
+                    // Dialog đã dismiss từ applyRunningState trước đó → toast luôn hiện được
+                    showCustomToast("✅ Cập nhật máy chủ thành công!", "#2E7D32")
+                    // Fetch thông báo mới từ web admin sau khi update sub xong
+                    fetchAnnouncement()
+                }
             }
         }
 
@@ -719,6 +753,10 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         binding.fab.rotation = 0f
     }
 
+
+    // ── FAB Fake GPS ─────────────────────────────────────────────────────
+
+    @Suppress("DEPRECATION")
     private fun applyRunningState(isRunning: Boolean) {
         // Đóng dialog connecting dù VPN bật thành công hay thất bại — tránh treo dialog
         VpnConnectingDialog.dismiss()
@@ -746,6 +784,8 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
         // ── Hiệu ứng chuyển trạng thái: rotate 360° + pulse ────────────
         isFabAnimating = true
+        // Timeout 700ms phòng withEndAction không chạy do animation bị interrupt
+        binding.fab.postDelayed({ isFabAnimating = false }, 700)
         binding.fab.animate()
             .rotationBy(360f)
             .scaleX(1.15f).scaleY(1.15f)
@@ -939,6 +979,8 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         tintItem(R.id.download_tiktok_plusgin, colorBlue)
         tintItem(R.id.update_yumvpn,           colorBlue)
         tintItem(R.id.tiktok_downloader,       colorBlue)
+
+
         tintItem(R.id.app_expire_setting,      colorBlue)
         tintItem(R.id.per_app_proxy_settings,  colorBlue)
         tintItem(R.id.settings,               colorBlue)
@@ -1112,9 +1154,6 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
     // Job tự cập nhật banner hết hạn mỗi 60 giây — luôn chạy khi app foreground
     private var expireBannerTickJob: Job? = null
 
-    // Thời điểm lần cuối auto update sub — cooldown 30 phút
-    private var lastAutoUpdateMs: Long = 0L
-    private val AUTO_UPDATE_COOLDOWN_MS = 30 * 60 * 1000L  // 30 phút
 
     // Lưu các downloadId đang chạy — để onResume kiểm tra nếu user thoát app giữa chừng
     private val pendingDownloadIds = mutableMapOf<Long, String>() // downloadId → title
@@ -2746,32 +2785,6 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
     // ================= NAV DRAWER =================
 
-    /**
-     * Bọc hành động tải TikTok bằng kiểm tra OTP:
-     * - Đã xác minh trước đây (bởi bất kỳ OTP dialog nào) → chạy [action] luôn
-     * - Chưa xác minh → hiện OtpDialog, xác minh thành công thì lưu + chạy [action]
-     */
-    private fun requireTiktokOtp(action: () -> Unit) {
-        if (TiktokDownloadPermission.isVerified(this)) {
-            action()
-            return
-        }
-        OtpDialog.show(this) {
-            // markVerified đã được gọi bên trong OtpDialog khi xác minh thành công
-            action()
-        }
-    }
-
-    /**
-     * Luôn luôn yêu cầu OTP mỗi lần nhấn — không kiểm tra cache đã xác minh trước đó.
-     * Dùng riêng cho "Tải Tiktok" và "Tải Tiktok Plusgin".
-     */
-    private fun requireTiktokOtpAlways(action: () -> Unit) {
-        OtpDialog.show(this) {
-            action()
-        }
-    }
-
     override fun onNavigationItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
             R.id.sub_setting -> {
@@ -2780,20 +2793,21 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             }
             R.id.update_tiktok -> {
                 binding.drawerLayout.closeDrawer(GravityCompat.START)
-                requireTiktokOtpAlways { downloadTiktok() }
+                TiktokDownloadDialog(this, mainViewModel.isRunning.value == true).show()
             }
             R.id.download_tiktok_plusgin -> {
                 binding.drawerLayout.closeDrawer(GravityCompat.START)
-                requireTiktokOtpAlways { downloadTiktokPlusgin() }
+                TiktokPluginDownloadDialog(this, mainViewModel.isRunning.value == true).show()
             }
             R.id.update_yumvpn -> {
                 binding.drawerLayout.closeDrawer(GravityCompat.START)
-                downloadYumVpn()
+                VpnUpdateDownloadDialog(this, mainViewModel.isRunning.value == true).show()
             }
             R.id.tiktok_downloader -> {
                 binding.drawerLayout.closeDrawer(GravityCompat.START)
                 showTikTokDownloaderDialog()
             }
+
             R.id.per_app_proxy_settings -> {
                 // OTP hiện trên drawer, sau khi đúng mới launch
                 AdminOtpDialog(this, title = "Xác minh vào Per-App Proxy") {
@@ -2821,6 +2835,8 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             R.id.about -> {
                 startActivity(Intent(this, AboutActivity::class.java))
             }
+            // ===================== Fake GPS =====================
+            // ===================== Fake GPS =====================
             R.id.app_expire_setting -> {
                 binding.drawerLayout.closeDrawer(GravityCompat.START)
                 // Mở thẳng dialog cài hạn — OTP chỉ hỏi khi bấm Lưu bên trong
@@ -2857,6 +2873,11 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
      *   - Đã hết hạn    → nền đỏ nhạt,     chữ đỏ đậm
      * Không có sub nào có expireDate → ẩn banner.
      */
+
+    // ─────────────────────────────────────────────────────────────────
+    // THÔNG BÁO DRAWER RIÊNG: TIKTOK + VPN
+    // ─────────────────────────────────────────────────────────────────
+
     // ─────────────────────────────────────────────────────────────────
     // THÔNG BÁO CHẠY NGANG TỪ WEB ADMIN
     // ─────────────────────────────────────────────────────────────────

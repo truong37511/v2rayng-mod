@@ -12,15 +12,11 @@ import java.net.Proxy
 import java.net.URL
 
 /**
- * Gọi API lấy gói đăng ký 1 năm (action=year) → ưu tiên sub_url, fallback sang ảnh QR.
+ * Gọi API lấy gói đăng ký 1 năm (action=year) → decode ảnh QR.
  *
  * Thứ tự fetch:
  *   1. Direct (không proxy)
  *   2. Nếu lỗi mạng/timeout → thử lại qua HTTP Proxy
- *
- * Thứ tự lấy config trong mỗi lần fetch:
- *   a. Thử dùng sub_url (link sub trực tiếp) nếu API trả về
- *   b. Nếu sub_url trống/lỗi → fallback decode ảnh QR
  */
 object SubYearFetcher {
 
@@ -34,8 +30,7 @@ object SubYearFetcher {
 
     sealed class FetchResult {
         data class Success(
-            val subContent: String,   // base64 body — dự phòng nếu cần
-            val subUrl: String = "",  // URL gốc của sub link — dùng để import đúng cách
+            val subContent: String,
             val expireDate: Long = 0L,
             val expireSource: String = "auto"
         ) : FetchResult()
@@ -43,21 +38,21 @@ object SubYearFetcher {
     }
 
     suspend fun fetchYearConfig(): FetchResult = withContext(Dispatchers.IO) {
-        // Thử direct trước
-        val directResult = doFetch(useProxy = false)
-        if (directResult is FetchResult.Success) return@withContext directResult
+        // Ưu tiên proxy trước — user đã bật VPN trước khi gọi API
+        val proxyResult = doFetch(useProxy = true)
+        if (proxyResult is FetchResult.Success) return@withContext proxyResult
 
-        val directErr = directResult as FetchResult.Error
+        val proxyErr = proxyResult as FetchResult.Error
 
-        // Chỉ fallback proxy khi lỗi mạng thực sự (không reach server)
-        // Nếu server đã phản hồi nhưng không có data → không cần thử proxy
-        if (!directErr.isNetworkError) {
-            Log.w(TAG, "Server phản hồi nhưng không có data, không fallback proxy.")
-            return@withContext directErr
+        // Server phản hồi qua proxy nhưng không có data → không cần thử direct
+        if (!proxyErr.isNetworkError) {
+            Log.w(TAG, "Server phản hồi qua proxy nhưng không có data, không fallback direct.")
+            return@withContext proxyErr
         }
 
-        Log.w(TAG, "Direct thất bại do mạng (${directErr.message}), thử qua proxy...")
-        doFetch(useProxy = true)
+        // Proxy thất bại (VPN chưa bật / port chưa mở) → fallback direct dự phòng
+        Log.w(TAG, "Proxy thất bại (${proxyErr.message}), thử direct dự phòng...")
+        doFetch(useProxy = false)
     }
 
     private fun doFetch(useProxy: Boolean): FetchResult {
@@ -101,35 +96,14 @@ object SubYearFetcher {
 
             val expireArg = if (metaExpire > 0L) metaExpire else 0L
 
-            // ── Bước 2a: Ưu tiên sub_url — fetch nội dung thực sự ────────
-            val subUrl = meta.optString("sub_url", "").trim()
-            if (subUrl.isNotBlank()) {
-                Log.d(TAG, "[$tag] Thử fetch sub_url: $subUrl")
-                val (subCode, subBody, subUserinfo) = httpGetWithHeaders(subUrl, proxy)
-
-                if (subCode != null && subCode in 200..299 && !subBody.isNullOrBlank()) {
-                    // Đọc expire từ header Subscription-Userinfo — ưu tiên hơn giá trị admin
-                    val headerExpireTs = Regex("expire=(\\d+)", RegexOption.IGNORE_CASE)
-                        .find(subUserinfo ?: "")?.groupValues?.get(1)?.toLongOrNull() ?: 0L
-
-                    // Ưu tiên: (1) header sub link, (2) expire từ admin API
-                    val finalExpire = if (headerExpireTs > 0L) headerExpireTs else expireArg
-                    val finalSource = if (headerExpireTs > 0L) "sub" else metaSource
-
-                    Log.d(TAG, "[$tag] sub_url fetch OK, body=${subBody.length} chars, expire=$finalExpire (header=$headerExpireTs admin=$expireArg)")
-                    return FetchResult.Success(subBody.trim(), subUrl, finalExpire, finalSource)
-                }
-                Log.w(TAG, "[$tag] sub_url HTTP=$subCode body=${subBody?.length ?: 0}, fallback sang QR.")
-            }
-
-            // ── Bước 2b: Fallback decode ảnh QR ──────────────────────────
+            // ── Bước 2: Decode ảnh QR ─────────────────────────────────────
             val qrUrl = meta.optString("url", "").trim()
             if (qrUrl.isNotBlank()) {
                 Log.d(TAG, "[$tag] Thử decode QR từ: $qrUrl")
                 val qrContent = decodeQrFromUrl(qrUrl, proxy)
                 if (!qrContent.isNullOrBlank()) {
                     Log.d(TAG, "[$tag] Decode QR thành công")
-                    return FetchResult.Success(qrContent, "", expireArg, metaSource)
+                    return FetchResult.Success(qrContent, expireArg, metaSource)
                 }
                 Log.w(TAG, "[$tag] Decode QR thất bại.")
             }
@@ -170,32 +144,6 @@ object SubYearFetcher {
         } catch (e: Exception) {
             Log.e(TAG, "httpGet error: $urlStr", e)
             Pair(null, null)
-        }
-    }
-
-    /**
-     * Fetch sub URL, trả về Triple(httpCode, body, subscription-userinfo header).
-     * Dùng User-Agent giống V2RayNG để sub server nhận diện đúng.
-     */
-    private fun httpGetWithHeaders(urlStr: String, proxy: Proxy): Triple<Int?, String?, String?> {
-        return try {
-            val conn = java.net.URL(urlStr).openConnection(proxy) as HttpURLConnection
-            conn.requestMethod  = "GET"
-            conn.connectTimeout = 10_000
-            conn.readTimeout    = 12_000
-            conn.setRequestProperty("User-Agent", "v2rayng/1.8.0")
-            conn.setRequestProperty("Accept", "*/*")
-
-            val code = conn.responseCode
-            if (code !in 200..299) return Triple(code, null, null)
-
-            val body     = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { it.readText() }
-            val userinfo = conn.getHeaderField("subscription-userinfo")
-                ?: conn.getHeaderField("Subscription-Userinfo")
-            Triple(code, body, userinfo)
-        } catch (e: Exception) {
-            Log.e(TAG, "httpGetWithHeaders error: $urlStr", e)
-            Triple(null, null, null)
         }
     }
 

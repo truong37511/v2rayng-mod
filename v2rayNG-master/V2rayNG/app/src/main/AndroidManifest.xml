@@ -44,6 +44,8 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+
+
     <application
         android:name=".AngApplication"
         android:allowBackup="true"

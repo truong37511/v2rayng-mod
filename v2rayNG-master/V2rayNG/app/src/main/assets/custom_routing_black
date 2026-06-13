@@ -7,16 +7,20 @@
     ]
   },
   {
-    "remarks": "阻断udp443",
-    "outboundTag": "block",
-    "port": "443",
-    "network": "udp"
-  },
-  {
     "remarks": "代理Google",
     "outboundTag": "proxy",
     "domain": [
-      "geosite:google"
+      "domain:google.com",
+      "domain:googleapis.com",
+      "domain:googleusercontent.com",
+      "domain:googlevideo.com",
+      "domain:gstatic.com",
+      "domain:google-analytics.com",
+      "domain:googleadservices.com",
+      "domain:ggpht.com",
+      "domain:ytimg.com",
+      "domain:youtube.com",
+      "domain:gmail.com"
     ]
   },
   {

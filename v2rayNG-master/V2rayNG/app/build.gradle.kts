@@ -21,8 +21,8 @@ android {
         applicationId = "com.v2ray.ang"
         minSdk = 24
         targetSdk = 35
-        versionCode = 59
-        versionName = "59.0.2"
+        versionCode = 70
+        versionName = "70.0.2"
         multiDexEnabled = true
 
         val abiFilterList = (properties["ABI_FILTERS"] as? String)?.split(';')
@@ -200,6 +200,8 @@ dependencies {
 
     // Multidex Support
     implementation(libs.multidex)
+    // Fake GPS — Fused Location Provider
+    implementation("com.google.android.gms:play-services-location:21.3.0")
 
     // Testing Libraries
     testImplementation(libs.junit)

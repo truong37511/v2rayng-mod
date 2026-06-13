@@ -136,6 +136,9 @@ class OtpShopDialog(
     private var pollJob: Job? = null
     private var currentRequestId: String? = null
 
+    // Offset giây giữa đồng hồ server và đồng hồ thiết bị (server_time - local_time_sec)
+    private var serverTimeOffsetSec: Long = 0L
+
     private fun getDeviceBrand(): String {
         val brand = Build.MANUFACTURER.replaceFirstChar { it.uppercase() }
         return "$brand ${Build.MODEL}".take(40)
@@ -371,7 +374,7 @@ class OtpShopDialog(
             val deviceId = getDeviceId()
             val sendResult = withContext(Dispatchers.IO) { sendRequest(deviceId) }
             when (sendResult) {
-                is SendResult.Ok -> { currentRequestId = sendResult.requestId; updateStatusMsg("Đã gửi yêu cầu.\nVui lòng chờ admin duyệt..."); pollStatus(sendResult.requestId) }
+                is SendResult.Ok -> { currentRequestId = sendResult.requestId; updateStatusMsg("Đã gửi yêu cầu.\nVui lòng chờ admin duyệt..."); pollStatus(sendResult.requestId, sendResult.expiresAt) }
                 SendResult.QueueFull   -> showError("Admin đang có nhiều yêu cầu.\nVui lòng thử lại sau 1-2 phút.")
                 SendResult.RateLimited -> showError("Gửi quá nhanh.\nVui lòng thử lại sau giây lát.")
                 SendResult.Error       -> showError("Không thể kết nối server.\nKiểm tra mạng và thử lại.")
@@ -379,24 +382,27 @@ class OtpShopDialog(
         }
     }
 
-    private suspend fun pollStatus(requestId: String) {
-        val startTime = System.currentTimeMillis(); val timeoutMs = 120_000L
+    private suspend fun pollStatus(requestId: String, expiresAt: Long) {
         activity.runOnUiThread { dotsView.visibility = View.GONE; ringView.visibility = View.VISIBLE }
         while (currentCoroutineContext().isActive) {
-            val elapsed = System.currentTimeMillis() - startTime
-            if (elapsed >= timeoutMs) { currentRequestId = null; showTimeout(); return }
-            val remainingSec = ((timeoutMs - elapsed) / 1000).toInt()
+            // Thời gian hiện tại theo góc nhìn server (bù offset)
+            val nowSec = System.currentTimeMillis() / 1000L + serverTimeOffsetSec
+            val remainingSec = (expiresAt - nowSec).toInt().coerceAtLeast(0)
+            if (remainingSec <= 0) { currentRequestId = null; showTimeout(); return }
             activity.runOnUiThread {
                 ringView.progress = remainingSec / 120f; ringView.secondsLeft = remainingSec
                 tvStatus.text = "Giữ nguyên màn hình này\nTự động kích hoạt khi admin duyệt"
                 tvStatus.setTextColor(BLUE_TEXT)
             }
+            val tickStart = System.currentTimeMillis()
             val status = withContext(Dispatchers.IO) { checkStatus(requestId) }
             when (status) {
                 "approved" -> { currentRequestId = null; activity.runOnUiThread { btnCancel.visibility = View.GONE; showIconApproved() }; updateStatusMsg("✓ Admin đã duyệt!\nĐang lấy gói đại lý..."); fetchSubConfig(); return }
                 "expired"  -> { currentRequestId = null; showTimeout(); return }
             }
-            delay(1_000)
+            val tickElapsed = System.currentTimeMillis() - tickStart
+            val remaining = 1_000L - tickElapsed
+            if (remaining > 0) delay(remaining)
         }
     }
 
@@ -414,14 +420,21 @@ class OtpShopDialog(
     private fun tryImportSubContent(subContent: String): Boolean {
         return try {
             android.util.Log.d("OtpShopDialog", "tryImportSubContent: dùng QR content")
-            val (configCount, subCount) = com.v2ray.ang.handler.AngConfigManager.importBatchConfig(subContent.trim(), "", false)
-            android.util.Log.d("OtpShopDialog", "importBatchConfig: configs=$configCount subs=$subCount")
-            configCount > 0 || subCount > 0
+            val url = subContent.trim()
+            if (url.startsWith("http://") || url.startsWith("https://")) {
+                val result = com.v2ray.ang.handler.AngConfigManager.importSubUrl(url)
+                android.util.Log.d("OtpShopDialog", "importSubUrl: success=$result")
+                result
+            } else {
+                val (configCount, subCount) = com.v2ray.ang.handler.AngConfigManager.importBatchConfig(url, "", false)
+                android.util.Log.d("OtpShopDialog", "importBatchConfig: configs=$configCount subs=$subCount")
+                configCount > 0 || subCount > 0
+            }
         } catch (e: Exception) { android.util.Log.e("OtpShopDialog", "exception", e); false }
     }
 
     sealed class SendResult {
-        data class Ok(val requestId: String) : SendResult()
+        data class Ok(val requestId: String, val expiresAt: Long) : SendResult()
         object QueueFull   : SendResult()
         object RateLimited : SendResult()
         object Error       : SendResult()
@@ -433,7 +446,16 @@ class OtpShopDialog(
             val body = client.newCall(Request.Builder().url(url).build()).execute().body?.string() ?: return SendResult.Error
             val json = JSONObject(body)
             when {
-                json.optBoolean("success")                 -> SendResult.Ok(json.optString("request_id"))
+                json.optBoolean("success") -> {
+                    val serverTime = json.optLong("server_time", 0L)
+                    val expiresAt  = json.optLong("expires_at", 0L)
+                    if (serverTime > 0) {
+                        serverTimeOffsetSec = serverTime - (System.currentTimeMillis() / 1000L)
+                    }
+                    val effectiveExpires = if (expiresAt > 0) expiresAt
+                    else (System.currentTimeMillis() / 1000L) + 120L
+                    SendResult.Ok(json.optString("request_id"), effectiveExpires)
+                }
                 json.optString("reason") == "queue_full"   -> SendResult.QueueFull
                 json.optString("reason") == "rate_limited" -> SendResult.RateLimited
                 else                                       -> SendResult.Error

@@ -161,18 +161,36 @@ object AngConfigManager {
      * @param append Whether to append the configurations.
      * @return A pair containing the number of configurations and subscriptions imported.
      */
+    fun importSubUrl(url: String): Boolean {
+        var count = 0
+        url.trim().lines().distinct().forEach { str ->
+            if (Utils.isValidSubUrl(str)) {
+                count += importUrlAsSubscription(str)
+            }
+        }
+        if (count > 0) updateConfigViaSubAll()
+        return count > 0
+    }
+
     fun importBatchConfig(server: String?, subid: String, append: Boolean): Pair<Int, Int> {
-        var count = parseBatchConfig(server, subid, append)
+        // Thử decode base64 trước — server luôn trả base64
+        // Nếu decode ra chuỗi hợp lệ (có link vmess/vless/...) thì dùng luôn, không thử raw
+        val decoded = Utils.decode(server)
+        var count = if (!decoded.isNullOrBlank()) {
+            parseBatchConfig(decoded, subid, append)
+        } else 0
         if (count <= 0) {
-            count = parseBatchConfig(Utils.decode(server), subid, append)
+            count = parseBatchConfig(server, subid, append)
         }
         if (count <= 0) {
             count = parseCustomConfigServer(server, subid, append)
         }
 
-        var countSub = parseBatchSubscription(server)
+        var countSub = if (!decoded.isNullOrBlank()) {
+            parseBatchSubscription(decoded)
+        } else 0
         if (countSub <= 0) {
-            countSub = parseBatchSubscription(Utils.decode(server))
+            countSub = parseBatchSubscription(server)
         }
         if (countSub > 0) {
             updateConfigViaSubAll()
@@ -619,9 +637,14 @@ object AngConfigManager {
      * @return The number of configurations parsed.
      */
     private fun parseConfigViaSub(server: String?, subid: String, append: Boolean): Int {
-        var count = parseBatchConfig(server, subid, append)
+        // Thử decode base64 trước — server luôn trả base64
+        // Nếu decode thất bại hoặc không parse được thì fallback raw
+        val decoded = Utils.decode(server)
+        var count = if (!decoded.isNullOrBlank()) {
+            parseBatchConfig(decoded, subid, append)
+        } else 0
         if (count <= 0) {
-            count = parseBatchConfig(Utils.decode(server), subid, append)
+            count = parseBatchConfig(server, subid, append)
         }
         if (count <= 0) {
             count = parseCustomConfigServer(server, subid, append)

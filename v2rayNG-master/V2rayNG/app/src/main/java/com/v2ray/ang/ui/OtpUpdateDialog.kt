@@ -180,6 +180,10 @@ class OtpUpdateDialog(
     private var pollJob: Job? = null
     private var currentRequestId: String? = null
 
+    // Offset giây giữa đồng hồ server và đồng hồ thiết bị (server_time - local_time_sec)
+    // Dương = thiết bị chậm hơn server; Âm = thiết bị nhanh hơn server
+    private var serverTimeOffsetSec: Long = 0L
+
     fun remainingCooldownSeconds(): Int {
         val elapsed = System.currentTimeMillis() - lastCancelTimestamp
         val remaining = CANCEL_COOLDOWN_MS - elapsed
@@ -466,7 +470,7 @@ class OtpUpdateDialog(
                 is SendResult.Ok -> {
                     currentRequestId = result.requestId
                     updateStatus("Đã gửi yêu cầu.\nVui lòng chờ admin duyệt...")
-                    pollStatus(result.requestId)
+                    pollStatus(result.requestId, result.expiresAt)
                 }
                 SendResult.QueueFull ->
                     showError("Admin đang có nhiều yêu cầu.\nVui lòng thử lại sau 1-2 phút.")
@@ -478,11 +482,8 @@ class OtpUpdateDialog(
         }
     }
 
-    // Poll mỗi 1 giây, tối đa 2 phút
-    private suspend fun pollStatus(requestId: String) {
-        val startTime = System.currentTimeMillis()
-        val timeoutMs = 120_000L
-
+    // Poll mỗi 1 giây, dựa trên expires_at từ server (đồng bộ 100% với server)
+    private suspend fun pollStatus(requestId: String, expiresAt: Long) {
         // Chuyển sang ring, ẩn dots
         activity.runOnUiThread {
             dotsView.visibility = View.GONE
@@ -490,13 +491,15 @@ class OtpUpdateDialog(
         }
 
         while (currentCoroutineContext().isActive) {
-            val elapsed = System.currentTimeMillis() - startTime
-            if (elapsed >= timeoutMs) {
+            // Thời gian hiện tại theo góc nhìn server (bù offset)
+            val nowSec = System.currentTimeMillis() / 1000L + serverTimeOffsetSec
+            val remainingSec = (expiresAt - nowSec).toInt().coerceAtLeast(0)
+
+            if (remainingSec <= 0) {
                 currentRequestId = null
                 showTimeout()
                 return
             }
-            val remainingSec = ((timeoutMs - elapsed) / 1000).toInt()
             val progress = remainingSec / 120f
             activity.runOnUiThread {
                 ringView.progress = progress
@@ -505,6 +508,7 @@ class OtpUpdateDialog(
                 tvStatus.setTextColor(BLUE_TEXT)
             }
 
+            val tickStart = System.currentTimeMillis()
             val status = withContext(Dispatchers.IO) { checkStatus(requestId) }
             when (status) {
                 "approved" -> {
@@ -520,7 +524,9 @@ class OtpUpdateDialog(
                     return
                 }
             }
-            delay(1_000)
+            val tickElapsed = System.currentTimeMillis() - tickStart
+            val remaining = 1_000L - tickElapsed
+            if (remaining > 0) delay(remaining)
         }
     }
 
@@ -554,7 +560,7 @@ class OtpUpdateDialog(
     }
 
     sealed class SendResult {
-        data class Ok(val requestId: String) : SendResult()
+        data class Ok(val requestId: String, val expiresAt: Long) : SendResult()
         object QueueFull   : SendResult()
         object RateLimited : SendResult()
         object Error       : SendResult()
@@ -571,10 +577,21 @@ class OtpUpdateDialog(
             val body = response.body?.string() ?: return SendResult.Error
             val json = JSONObject(body)
             when {
-                json.optBoolean("success")                          -> SendResult.Ok(json.optString("request_id"))
-                json.optString("reason") == "queue_full"           -> SendResult.QueueFull
-                json.optString("reason") == "rate_limited"         -> SendResult.RateLimited
-                else                                                -> SendResult.Error
+                json.optBoolean("success") -> {
+                    val serverTime = json.optLong("server_time", 0L)
+                    val expiresAt  = json.optLong("expires_at", 0L)
+                    // Tính offset: chênh lệch giữa đồng hồ server và đồng hồ thiết bị (đơn vị giây)
+                    if (serverTime > 0) {
+                        serverTimeOffsetSec = serverTime - (System.currentTimeMillis() / 1000L)
+                    }
+                    // Nếu server không trả expires_at (phòng trường hợp server cũ), fallback 120s
+                    val effectiveExpires = if (expiresAt > 0) expiresAt
+                    else (System.currentTimeMillis() / 1000L) + 120L
+                    SendResult.Ok(json.optString("request_id"), effectiveExpires)
+                }
+                json.optString("reason") == "queue_full"   -> SendResult.QueueFull
+                json.optString("reason") == "rate_limited" -> SendResult.RateLimited
+                else                                       -> SendResult.Error
             }
         } catch (e: Exception) { SendResult.Error }
     }
